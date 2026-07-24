@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -52,6 +53,8 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 		AdminPasswordHash: string(passwordHash), SessionSecret: "0123456789abcdef0123456789abcdef",
 		SessionIdleTimeout: time.Minute, SessionMaxLifetime: time.Hour,
 		MaxClockSkew: 2 * time.Minute, CPUAlertThreshold: 80,
+		MemoryAlertThreshold: 90, DiskWarningThreshold: 85,
+		DiskCriticalThreshold: 95, AgentOfflineAfter: 2 * time.Minute,
 		RawRetention: 7 * 24 * time.Hour,
 	}
 	store, err := storage.Open(filepath.Join(t.TempDir(), "test.db"))
@@ -90,6 +93,7 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 	if response := send(token); response.Code != http.StatusAccepted {
 		t.Fatalf("ingest returned %d: %s", response.Code, response.Body.String())
 	}
+	app.processNotifications(context.Background())
 	if len(mailer.alerts) != 1 || mailer.alerts[0].State != "firing" {
 		t.Fatalf("expected firing alert notification, got %+v", mailer.alerts)
 	}
@@ -118,5 +122,31 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 	app.Handler().ServeHTTP(historyResponse, historyRequest)
 	if historyResponse.Code != http.StatusOK {
 		t.Fatalf("history returned %d: %s", historyResponse.Code, historyResponse.Body.String())
+	}
+	session, ok := app.sessions.Get(historyRequest)
+	if !ok {
+		t.Fatal("authenticated session not found")
+	}
+	alerts, err := store.ActiveAlerts(context.Background())
+	if err != nil || len(alerts) != 1 {
+		t.Fatalf("active alerts: %+v, err=%v", alerts, err)
+	}
+	ackForm := url.Values{"csrf_token": {session.CSRF}}
+	ackRequest := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/alerts/%d/ack", alerts[0].ID),
+		bytes.NewBufferString(ackForm.Encode()))
+	ackRequest.SetPathValue("id", fmt.Sprintf("%d", alerts[0].ID))
+	ackRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, cookie := range loginResponse.Result().Cookies() {
+		ackRequest.AddCookie(cookie)
+	}
+	ackResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(ackResponse, ackRequest)
+	if ackResponse.Code != http.StatusSeeOther {
+		t.Fatalf("acknowledgement returned %d: %s", ackResponse.Code, ackResponse.Body.String())
+	}
+	alerts, err = store.ActiveAlerts(context.Background())
+	if err != nil || alerts[0].AcknowledgedAt == nil || alerts[0].AcknowledgedBy != "admin" {
+		t.Fatalf("alert was not acknowledged: %+v, err=%v", alerts, err)
 	}
 }

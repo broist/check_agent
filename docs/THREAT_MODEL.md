@@ -21,7 +21,7 @@
 | CSRF | state-changing requests | per-session CSRF token and Origin check | dashboard is still XSS-sensitive |
 | XSS from host/mount data | session theft | `html/template`, JSON encoder, CSP, no inline untrusted HTML | future UI code must retain these properties |
 | SQL injection | data loss/disclosure | parameterized SQL and fixed queries | migration review remains required |
-| Alert-mail storm | cost/noise | transition-only delivery and stored state | cooldown/pending duration is next milestone |
+| Alert-mail storm | cost/noise | pending duration, transition-only delivery, retry state and cooldown | distributed upstream failures can still create distinct alerts |
 | SMTP credential leakage | account compromise | environment-only secret; redacted logging | process environment readable to privileged users |
 | Malicious proxy headers | auth/rate-limit bypass | proxy headers ignored unless trusted proxy is configured | configure exact loopback proxy CIDRs only |
 | Agent privilege escalation | host compromise | dedicated unprivileged user, systemd sandbox, read-only collection | kernel pseudo-files expose host metadata |
@@ -44,4 +44,3 @@ read access to `/proc`, mount metadata and the network, plus write access only
 to `/var/lib/monitorozo-agent`. The server needs network bind permission on an
 unprivileged loopback port and write access only to
 `/var/lib/monitorozo-server`. Neither service can modify monitored workloads.
-

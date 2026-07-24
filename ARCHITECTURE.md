@@ -80,11 +80,14 @@ and per-IP login throttling. Security headers are applied globally.
 
 ### Alert flow
 
-The MVP evaluates a configurable CPU threshold. A report above the threshold
-creates or retains a firing alert. A later report below it resolves the alert.
-State transitions are audited. Notification delivery is deduplicated by state;
-SMTP can be disabled for local development. Failed delivery is logged and does
-not roll back the stored report.
+The rule engine evaluates CPU and memory duration thresholds, per-mount disk
+warning/critical thresholds and agent-offline state. Rules move through
+`pending`, `firing` and `resolved`; every transition is audited. Notifications
+are stored before delivery, retried by one bounded background worker and
+deduplicated with a configurable cooldown. Firing and recovery e-mails contain
+the resource, measured value, threshold, start time and outage duration.
+Operators can acknowledge active alerts through a CSRF-protected dashboard
+action. SMTP can be disabled for local development.
 
 ## Configuration and secrets
 

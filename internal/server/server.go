@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,9 +13,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/broist/check_agent/internal/alerts"
 	"github.com/broist/check_agent/internal/auth"
 	"github.com/broist/check_agent/internal/config"
 	"github.com/broist/check_agent/internal/model"
@@ -40,12 +43,15 @@ type Server struct {
 	templates    *template.Template
 	trustedProxy *net.IPNet
 	events       *broker
+	alerts       *alerts.Engine
+	notifyWake   chan struct{}
 }
 
 type dashboardData struct {
-	CSRF    string
-	Reports []model.Report
-	Alerts  []storage.Alert
+	CSRF         string
+	Reports      []model.Report
+	Alerts       []storage.Alert
+	AlertHistory []storage.Alert
 }
 
 func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *slog.Logger) (*Server, error) {
@@ -64,13 +70,13 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 			return fmt.Sprintf("%.1f %s", value, units[unit])
 		},
 		"online": func(value time.Time) string {
-			if time.Since(value) <= 120*time.Second {
+			if time.Since(value) <= cfg.AgentOfflineAfter {
 				return "online"
 			}
 			return "offline"
 		},
 		"status": func(value time.Time) string {
-			if time.Since(value) <= 120*time.Second {
+			if time.Since(value) <= cfg.AgentOfflineAfter {
 				return "ok"
 			}
 			return "offline"
@@ -88,6 +94,8 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 		apiLimiter:   auth.NewLimiter(120, time.Minute),
 		templates:    templates,
 		events:       newBroker(),
+		alerts:       alerts.New(store, cfg),
+		notifyWake:   make(chan struct{}, 1),
 	}
 	if cfg.TrustedProxy != "" {
 		_, network, err := net.ParseCIDR(cfg.TrustedProxy)
@@ -108,6 +116,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/reports", s.ingest)
 	mux.HandleFunc("GET /api/v1/history", s.requireAuth(s.history))
 	mux.HandleFunc("GET /api/v1/events", s.requireAuth(s.eventStream))
+	mux.HandleFunc("POST /api/v1/alerts/{id}/ack", s.requireAuth(s.acknowledgeAlert))
 	mux.Handle("GET /static/", http.FileServer(http.FS(web.Files)))
 	mux.HandleFunc("GET /", s.requireAuth(s.dashboard))
 	return s.securityHeaders(mux)
@@ -183,7 +192,45 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, "dashboard", dashboardData{CSRF: session.CSRF, Reports: reports, Alerts: alerts})
+	history, err := s.store.AlertHistory(ctx, 50)
+	if err != nil {
+		s.logger.Error("load alert history failed", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, "dashboard", dashboardData{
+		CSRF: session.CSRF, Reports: reports, Alerts: alerts, AlertHistory: history,
+	})
+}
+
+func (s *Server) acknowledgeAlert(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.sessions.Get(r)
+	if !ok || !s.validOrigin(r) {
+		http.Error(w, "invalid session or origin", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil ||
+		subtle.ConstantTimeCompare([]byte(session.CSRF), []byte(r.FormValue("csrf_token"))) != 1 {
+		http.Error(w, "invalid CSRF token", http.StatusForbidden)
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		http.Error(w, "invalid alert id", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := contextWithTimeout(r, 5*time.Second)
+	defer cancel()
+	if err := s.store.AcknowledgeAlert(ctx, id, "admin", time.Now()); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "alert not found or already acknowledged", http.StatusNotFound)
+			return
+		}
+		s.logger.Error("acknowledge alert failed", "error", err, "alert_id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
@@ -292,15 +339,12 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	alert, err := s.store.EvaluateCPU(ctx, report, s.cfg.CPUAlertThreshold)
-	if err != nil {
+	if err := s.alerts.EvaluateReport(ctx, report, time.Now()); err != nil {
 		s.logger.Error("alert evaluation failed", "error", err, "agent_id", report.AgentID)
-	} else if alert != nil {
-		if err := s.mailer.Send(*alert, s.cfg.PublicURL); err != nil {
-			s.logger.Error("alert email failed", "error", err, "agent_id", report.AgentID)
-		} else if err := s.store.MarkAlertNotified(ctx, alert.ID); err != nil {
-			s.logger.Error("mark alert notification failed", "error", err, "alert_id", alert.ID)
-		}
+	}
+	select {
+	case s.notifyWake <- struct{}{}:
+	default:
 	}
 	event, _ := json.Marshal(struct {
 		AgentID   string    `json:"agent_id"`
@@ -310,6 +354,64 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = io.WriteString(w, `{"status":"accepted"}`)
+}
+
+func (s *Server) Run(ctx context.Context) {
+	offlineTicker := time.NewTicker(15 * time.Second)
+	retryTicker := time.NewTicker(time.Minute)
+	defer offlineTicker.Stop()
+	defer retryTicker.Stop()
+	s.processNotifications(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.notifyWake:
+			s.processNotifications(ctx)
+		case <-retryTicker.C:
+			s.processNotifications(ctx)
+		case now := <-offlineTicker.C:
+			operationCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			if err := s.alerts.EvaluateOffline(operationCtx, now); err != nil && ctx.Err() == nil {
+				s.logger.Error("offline alert evaluation failed", "error", err)
+			}
+			cancel()
+			s.processNotifications(ctx)
+		}
+	}
+}
+
+func (s *Server) processNotifications(ctx context.Context) {
+	operationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	pending, err := s.store.PendingNotifications(operationCtx, 50)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logger.Error("load pending notifications failed", "error", err)
+		}
+		return
+	}
+	for _, alert := range pending {
+		inCooldown, err := s.store.NotificationInCooldown(
+			operationCtx, alert, s.cfg.AlertCooldown, time.Now())
+		if err != nil {
+			s.logger.Error("notification cooldown check failed", "error", err, "alert_id", alert.ID)
+			continue
+		}
+		if inCooldown {
+			if err := s.store.MarkAlertNotification(operationCtx, alert.ID, "suppressed", time.Now()); err != nil {
+				s.logger.Error("suppress alert notification failed", "error", err, "alert_id", alert.ID)
+			}
+			continue
+		}
+		if err := s.mailer.Send(alert, s.cfg.PublicURL); err != nil {
+			s.logger.Error("alert email failed", "error", err, "agent_id", alert.AgentID)
+			continue
+		}
+		if err := s.store.MarkAlertNotification(operationCtx, alert.ID, "sent", time.Now()); err != nil {
+			s.logger.Error("mark alert notification failed", "error", err, "alert_id", alert.ID)
+		}
+	}
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {

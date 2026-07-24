@@ -31,8 +31,8 @@ func (s *Sender) Send(alert storage.Alert, dashboardURL string) error {
 	if alert.ResolvedAt != nil {
 		duration = fmt.Sprintf("\nDuration: %s", alert.ResolvedAt.Sub(alert.StartedAt).Round(time.Second))
 	}
-	body := fmt.Sprintf("Server: %s\nSeverity: %s\nRule: %s\nState: %s\nValue: %.2f\nThreshold: %.2f\nStarted: %s%s\nDashboard: %s\n",
-		alert.AgentID, alert.Severity, alert.RuleKey, alert.State, alert.Value,
+	body := fmt.Sprintf("Server: %s\nSeverity: %s\nRule: %s\nResource: %s\nState: %s\nValue: %.2f\nThreshold: %.2f\nStarted: %s%s\nDashboard: %s\n",
+		alert.AgentID, alert.Severity, alert.RuleKey, alert.Resource, alert.State, alert.Value,
 		alert.Threshold, alert.StartedAt.Format(time.RFC3339), duration, dashboardURL)
 	message := []byte("From: " + s.cfg.From + "\r\nTo: " + s.cfg.To +
 		"\r\nSubject: " + subject + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body)

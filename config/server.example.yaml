@@ -7,6 +7,12 @@ session_idle_timeout: 30m
 session_max_lifetime: 12h
 max_clock_skew: 2m
 cpu_alert_threshold: 90
+memory_alert_threshold: 90
+high_usage_duration: 5m
+disk_warning_threshold: 85
+disk_critical_threshold: 95
+agent_offline_after: 120s
+alert_cooldown: 30m
 trusted_proxy: 127.0.0.0/8
 raw_retention: 168h
 aggregate_retention: 2160h

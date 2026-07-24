@@ -25,15 +25,37 @@ type Store struct {
 }
 
 type Alert struct {
-	ID         int64
-	AgentID    string
-	RuleKey    string
-	Severity   string
-	State      string
-	Value      float64
-	Threshold  float64
-	StartedAt  time.Time
-	ResolvedAt *time.Time
+	ID                int64
+	AgentID           string
+	RuleKey           string
+	Resource          string
+	Severity          string
+	State             string
+	Value             float64
+	Threshold         float64
+	StartedAt         time.Time
+	FiringAt          *time.Time
+	ResolvedAt        *time.Time
+	AcknowledgedAt    *time.Time
+	AcknowledgedBy    string
+	NotificationState string
+	LastNotifiedAt    *time.Time
+}
+
+type RuleEvaluation struct {
+	AgentID   string
+	RuleKey   string
+	Resource  string
+	Severity  string
+	Value     float64
+	Threshold float64
+	Violated  bool
+	For       time.Duration
+}
+
+type AgentLastSeen struct {
+	AgentID  string
+	LastSeen time.Time
 }
 
 type HistoryPoint struct {
@@ -372,93 +394,256 @@ func (s *Store) Maintain(ctx context.Context, now time.Time, rawRetention, aggre
 }
 
 func (s *Store) ActiveAlerts(ctx context.Context) ([]Alert, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, agent_id, rule_key, severity,
-		state, value, threshold, started_at, resolved_at FROM alerts
-		WHERE state='firing' ORDER BY started_at DESC`)
+	return s.queryAlerts(ctx, `SELECT `+alertColumns+` FROM alerts
+		WHERE state IN ('pending', 'firing') ORDER BY started_at DESC`)
+}
+
+func (s *Store) AlertHistory(ctx context.Context, limit int) ([]Alert, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	return s.queryAlerts(ctx, `SELECT `+alertColumns+` FROM alerts
+		WHERE state='resolved' ORDER BY resolved_at DESC LIMIT ?`, limit)
+}
+
+const alertColumns = `id, agent_id, rule_key, resource, severity, state, value,
+	threshold, started_at, firing_at, resolved_at, acknowledged_at,
+	acknowledged_by, notification_state, last_notified_at`
+
+func (s *Store) queryAlerts(ctx context.Context, query string, args ...any) ([]Alert, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var alerts []Alert
 	for rows.Next() {
-		var item Alert
-		var started string
-		var resolved sql.NullString
-		if err := rows.Scan(&item.ID, &item.AgentID, &item.RuleKey, &item.Severity,
-			&item.State, &item.Value, &item.Threshold, &started, &resolved); err != nil {
+		item, err := scanAlert(rows)
+		if err != nil {
 			return nil, err
-		}
-		item.StartedAt, _ = time.Parse(time.RFC3339Nano, started)
-		if resolved.Valid {
-			value, _ := time.Parse(time.RFC3339Nano, resolved.String)
-			item.ResolvedAt = &value
 		}
 		alerts = append(alerts, item)
 	}
 	return alerts, rows.Err()
 }
 
-func (s *Store) EvaluateCPU(ctx context.Context, report model.Report, threshold float64) (*Alert, error) {
-	now := time.Now().UTC()
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanAlert(scanner rowScanner) (Alert, error) {
+	var item Alert
+	var started string
+	var firing, resolved, acknowledged, acknowledgedBy, lastNotified sql.NullString
+	err := scanner.Scan(&item.ID, &item.AgentID, &item.RuleKey, &item.Resource,
+		&item.Severity, &item.State, &item.Value, &item.Threshold, &started,
+		&firing, &resolved, &acknowledged, &acknowledgedBy,
+		&item.NotificationState, &lastNotified)
+	if err != nil {
+		return item, err
+	}
+	item.StartedAt, _ = time.Parse(time.RFC3339Nano, started)
+	item.FiringAt = parseNullableTime(firing)
+	item.ResolvedAt = parseNullableTime(resolved)
+	item.AcknowledgedAt = parseNullableTime(acknowledged)
+	item.LastNotifiedAt = parseNullableTime(lastNotified)
+	if acknowledgedBy.Valid {
+		item.AcknowledgedBy = acknowledgedBy.String
+	}
+	return item, nil
+}
+
+func parseNullableTime(value sql.NullString) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value.String)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func (s *Store) ApplyRule(ctx context.Context, evaluation RuleEvaluation, now time.Time) (bool, error) {
+	now = now.UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	defer tx.Rollback()
 	var existing Alert
-	var started string
-	err = tx.QueryRowContext(ctx, `SELECT id, severity, value, threshold, started_at
-		FROM alerts WHERE agent_id=? AND rule_key='cpu_high' AND state='firing'`,
-		report.AgentID).Scan(&existing.ID, &existing.Severity, &existing.Value,
-		&existing.Threshold, &started)
-	hasFiring := err == nil
+	existing, err = scanAlert(tx.QueryRowContext(ctx, `SELECT `+alertColumns+`
+		FROM alerts WHERE agent_id=? AND rule_key=? AND resource=?
+		AND state IN ('pending', 'firing')`,
+		evaluation.AgentID, evaluation.RuleKey, evaluation.Resource))
+	hasActive := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
+		return false, err
 	}
-	if hasFiring {
-		existing.AgentID, existing.RuleKey, existing.State = report.AgentID, "cpu_high", "firing"
-		existing.StartedAt, _ = time.Parse(time.RFC3339Nano, started)
-	}
-	if report.CPUPercent >= threshold && !hasFiring {
-		result, err := tx.ExecContext(ctx, `INSERT INTO alerts(agent_id, rule_key,
-			severity, state, value, threshold, started_at) VALUES(?, 'cpu_high',
-			'critical', 'firing', ?, ?, ?)`, report.AgentID, report.CPUPercent,
-			threshold, now.Format(time.RFC3339Nano))
+	changed := false
+	if evaluation.Violated && !hasActive {
+		state := "pending"
+		notification := "none"
+		var firingAt any
+		if evaluation.For <= 0 {
+			state = "firing"
+			notification = "pending"
+			firingAt = now.Format(time.RFC3339Nano)
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO alerts(agent_id, rule_key,
+			resource, severity, state, value, threshold, started_at, firing_at,
+			notification_state) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			evaluation.AgentID, evaluation.RuleKey, evaluation.Resource,
+			evaluation.Severity, state, evaluation.Value, evaluation.Threshold,
+			now.Format(time.RFC3339Nano), firingAt, notification)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
-		id, _ := result.LastInsertId()
-		existing = Alert{ID: id, AgentID: report.AgentID, RuleKey: "cpu_high",
-			Severity: "critical", State: "firing", Value: report.CPUPercent,
-			Threshold: threshold, StartedAt: now}
-		if err := auditTx(ctx, tx, "system", "alert.firing", report.AgentID+"/cpu_high",
-			fmt.Sprintf("value=%.2f threshold=%.2f", report.CPUPercent, threshold)); err != nil {
-			return nil, err
+		if err := auditRuleTx(ctx, tx, evaluation, state); err != nil {
+			return false, err
 		}
-	} else if report.CPUPercent < threshold && hasFiring {
+		changed = true
+	} else if evaluation.Violated && hasActive {
+		if existing.State == "pending" && now.Sub(existing.StartedAt) >= evaluation.For {
+			_, err := tx.ExecContext(ctx, `UPDATE alerts SET state='firing',
+				firing_at=?, severity=?, value=?, threshold=?,
+				notification_state='pending' WHERE id=?`,
+				now.Format(time.RFC3339Nano), evaluation.Severity,
+				evaluation.Value, evaluation.Threshold, existing.ID)
+			if err != nil {
+				return false, err
+			}
+			if err := auditRuleTx(ctx, tx, evaluation, "firing"); err != nil {
+				return false, err
+			}
+			changed = true
+		} else {
+			_, err := tx.ExecContext(ctx, `UPDATE alerts SET severity=?, value=?,
+				threshold=? WHERE id=?`, evaluation.Severity, evaluation.Value,
+				evaluation.Threshold, existing.ID)
+			if err != nil {
+				return false, err
+			}
+		}
+	} else if !evaluation.Violated && hasActive {
+		notification := "none"
+		if existing.State == "firing" {
+			notification = "pending"
+			if existing.NotificationState == "suppressed" {
+				notification = "suppressed"
+			}
+		}
 		_, err := tx.ExecContext(ctx, `UPDATE alerts SET state='resolved',
-			resolved_at=?, value=?, notification_state='pending' WHERE id=?`,
-			now.Format(time.RFC3339Nano), report.CPUPercent, existing.ID)
+			resolved_at=?, value=?, threshold=?, notification_state=? WHERE id=?`,
+			now.Format(time.RFC3339Nano), evaluation.Value, evaluation.Threshold,
+			notification, existing.ID)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
-		existing.State, existing.Value, existing.ResolvedAt = "resolved", report.CPUPercent, &now
-		if err := auditTx(ctx, tx, "system", "alert.resolved", report.AgentID+"/cpu_high",
-			fmt.Sprintf("value=%.2f threshold=%.2f", report.CPUPercent, threshold)); err != nil {
-			return nil, err
+		if err := auditRuleTx(ctx, tx, evaluation, "resolved"); err != nil {
+			return false, err
 		}
-	} else {
-		return nil, tx.Commit()
+		changed = true
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return false, err
 	}
-	return &existing, nil
+	return changed, nil
 }
 
-func (s *Store) MarkAlertNotified(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, "UPDATE alerts SET notification_state='sent' WHERE id=?", id)
+func auditRuleTx(ctx context.Context, tx *sql.Tx, evaluation RuleEvaluation, state string) error {
+	target := evaluation.AgentID + "/" + evaluation.RuleKey
+	if evaluation.Resource != "" {
+		target += "/" + evaluation.Resource
+	}
+	return auditTx(ctx, tx, "system", "alert."+state, target,
+		fmt.Sprintf("value=%.2f threshold=%.2f severity=%s",
+			evaluation.Value, evaluation.Threshold, evaluation.Severity))
+}
+
+func (s *Store) PendingNotifications(ctx context.Context, limit int) ([]Alert, error) {
+	if limit < 1 || limit > 100 {
+		limit = 100
+	}
+	return s.queryAlerts(ctx, `SELECT `+alertColumns+` FROM alerts
+		WHERE notification_state='pending' AND state IN ('firing', 'resolved')
+		ORDER BY id LIMIT ?`, limit)
+}
+
+func (s *Store) NotificationInCooldown(ctx context.Context, alert Alert, cooldown time.Duration, now time.Time) (bool, error) {
+	if alert.State != "firing" || cooldown <= 0 {
+		return false, nil
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM alerts
+		WHERE agent_id=? AND rule_key=? AND resource=? AND id<>?
+		AND notification_state='sent' AND last_notified_at>=?`,
+		alert.AgentID, alert.RuleKey, alert.Resource, alert.ID,
+		now.UTC().Add(-cooldown).Format(time.RFC3339Nano)).Scan(&count)
+	return count > 0, err
+}
+
+func (s *Store) MarkAlertNotification(ctx context.Context, id int64, state string, now time.Time) error {
+	if state != "sent" && state != "suppressed" {
+		return errors.New("invalid notification state")
+	}
+	var notifiedAt any
+	if state == "sent" {
+		notifiedAt = now.UTC().Format(time.RFC3339Nano)
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE alerts SET notification_state=?,
+		last_notified_at=COALESCE(?, last_notified_at) WHERE id=?`,
+		state, notifiedAt, id)
 	return err
+}
+
+func (s *Store) AcknowledgeAlert(ctx context.Context, id int64, actor string, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE alerts SET acknowledged_at=?,
+		acknowledged_by=? WHERE id=? AND state IN ('pending', 'firing')
+		AND acknowledged_at IS NULL`, now.UTC().Format(time.RFC3339Nano), actor, id)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	if err := auditTx(ctx, tx, actor, "alert.acknowledged",
+		strconv.FormatInt(id, 10), "alert acknowledged"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) AgentLastSeen(ctx context.Context) ([]AgentLastSeen, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT agent_id, last_seen FROM agents
+		WHERE last_seen IS NOT NULL ORDER BY agent_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []AgentLastSeen
+	for rows.Next() {
+		var item AgentLastSeen
+		var value string
+		if err := rows.Scan(&item.AgentID, &value); err != nil {
+			return nil, err
+		}
+		item.LastSeen, _ = time.Parse(time.RFC3339Nano, value)
+		result = append(result, item)
+	}
+	return result, rows.Err()
 }
 
 func auditTx(ctx context.Context, tx *sql.Tx, actor, action, target, details string) error {

@@ -5,7 +5,9 @@ repository currently contains the first end-to-end MVP: a lightweight agent,
 authenticated ingestion server, SQLite persistence, secure dashboard and a CPU
 threshold SMTP alert. It also includes authenticated live updates, CPU/RAM
 history charts, seven-day raw retention, 90-day hourly aggregates, disk I/O
-rates and per-interface network throughput.
+rates and per-interface network throughput. Its alert engine supports
+pending/firing/resolved CPU, memory, disk and offline rules, cooldown,
+delivery retry, recovery mail, acknowledgement and history.
 
 The exact scope and intentional deferrals are in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Do not expose development HTTP

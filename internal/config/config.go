@@ -24,22 +24,28 @@ type Agent struct {
 }
 
 type Server struct {
-	Listen              string        `yaml:"listen"`
-	DatabasePath        string        `yaml:"database_path"`
-	PublicURL           string        `yaml:"public_url"`
-	AgentTokens         []AgentToken  `yaml:"agent_tokens"`
-	AdminPasswordHash   string        `yaml:"admin_password_hash"`
-	SessionSecret       string        `yaml:"session_secret"`
-	SessionIdleTimeout  time.Duration `yaml:"session_idle_timeout"`
-	SessionMaxLifetime  time.Duration `yaml:"session_max_lifetime"`
-	SecureCookies       bool          `yaml:"secure_cookies"`
-	MaxClockSkew        time.Duration `yaml:"max_clock_skew"`
-	CPUAlertThreshold   float64       `yaml:"cpu_alert_threshold"`
-	TrustedProxy        string        `yaml:"trusted_proxy"`
-	RawRetention        time.Duration `yaml:"raw_retention"`
-	AggregateRetention  time.Duration `yaml:"aggregate_retention"`
-	MaintenanceInterval time.Duration `yaml:"maintenance_interval"`
-	SMTP                SMTP          `yaml:"smtp"`
+	Listen                string        `yaml:"listen"`
+	DatabasePath          string        `yaml:"database_path"`
+	PublicURL             string        `yaml:"public_url"`
+	AgentTokens           []AgentToken  `yaml:"agent_tokens"`
+	AdminPasswordHash     string        `yaml:"admin_password_hash"`
+	SessionSecret         string        `yaml:"session_secret"`
+	SessionIdleTimeout    time.Duration `yaml:"session_idle_timeout"`
+	SessionMaxLifetime    time.Duration `yaml:"session_max_lifetime"`
+	SecureCookies         bool          `yaml:"secure_cookies"`
+	MaxClockSkew          time.Duration `yaml:"max_clock_skew"`
+	CPUAlertThreshold     float64       `yaml:"cpu_alert_threshold"`
+	MemoryAlertThreshold  float64       `yaml:"memory_alert_threshold"`
+	HighUsageDuration     time.Duration `yaml:"high_usage_duration"`
+	DiskWarningThreshold  float64       `yaml:"disk_warning_threshold"`
+	DiskCriticalThreshold float64       `yaml:"disk_critical_threshold"`
+	AgentOfflineAfter     time.Duration `yaml:"agent_offline_after"`
+	AlertCooldown         time.Duration `yaml:"alert_cooldown"`
+	TrustedProxy          string        `yaml:"trusted_proxy"`
+	RawRetention          time.Duration `yaml:"raw_retention"`
+	AggregateRetention    time.Duration `yaml:"aggregate_retention"`
+	MaintenanceInterval   time.Duration `yaml:"maintenance_interval"`
+	SMTP                  SMTP          `yaml:"smtp"`
 }
 
 type AgentToken struct {
@@ -89,16 +95,22 @@ func LoadAgent(path string) (Agent, error) {
 
 func LoadServer(path string) (Server, error) {
 	cfg := Server{
-		Listen:              "127.0.0.1:8080",
-		DatabasePath:        "/var/lib/monitorozo-server/monitorozo.db",
-		SessionIdleTimeout:  30 * time.Minute,
-		SessionMaxLifetime:  12 * time.Hour,
-		SecureCookies:       true,
-		MaxClockSkew:        2 * time.Minute,
-		CPUAlertThreshold:   90,
-		RawRetention:        7 * 24 * time.Hour,
-		AggregateRetention:  90 * 24 * time.Hour,
-		MaintenanceInterval: time.Hour,
+		Listen:                "127.0.0.1:8080",
+		DatabasePath:          "/var/lib/monitorozo-server/monitorozo.db",
+		SessionIdleTimeout:    30 * time.Minute,
+		SessionMaxLifetime:    12 * time.Hour,
+		SecureCookies:         true,
+		MaxClockSkew:          2 * time.Minute,
+		CPUAlertThreshold:     90,
+		MemoryAlertThreshold:  90,
+		HighUsageDuration:     5 * time.Minute,
+		DiskWarningThreshold:  85,
+		DiskCriticalThreshold: 95,
+		AgentOfflineAfter:     120 * time.Second,
+		AlertCooldown:         30 * time.Minute,
+		RawRetention:          7 * 24 * time.Hour,
+		AggregateRetention:    90 * 24 * time.Hour,
+		MaintenanceInterval:   time.Hour,
 	}
 	if err := loadYAML(path, &cfg); err != nil {
 		return cfg, err
@@ -121,6 +133,22 @@ func LoadServer(path string) (Server, error) {
 	}
 	if cfg.CPUAlertThreshold <= 0 || cfg.CPUAlertThreshold > 100 {
 		return cfg, errors.New("cpu_alert_threshold must be between 0 and 100")
+	}
+	if cfg.MemoryAlertThreshold <= 0 || cfg.MemoryAlertThreshold > 100 {
+		return cfg, errors.New("memory_alert_threshold must be between 0 and 100")
+	}
+	if cfg.HighUsageDuration < 0 {
+		return cfg, errors.New("high_usage_duration must not be negative")
+	}
+	if cfg.DiskWarningThreshold <= 0 || cfg.DiskWarningThreshold >= cfg.DiskCriticalThreshold ||
+		cfg.DiskCriticalThreshold > 100 {
+		return cfg, errors.New("disk thresholds must be ordered between 0 and 100")
+	}
+	if cfg.AgentOfflineAfter < 30*time.Second {
+		return cfg, errors.New("agent_offline_after must be at least 30s")
+	}
+	if cfg.AlertCooldown < 0 {
+		return cfg, errors.New("alert_cooldown must not be negative")
 	}
 	if cfg.RawRetention < 24*time.Hour {
 		return cfg, errors.New("raw_retention must be at least 24h")

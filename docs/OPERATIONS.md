@@ -102,6 +102,13 @@ for 90 days. Maintenance runs hourly and applies both deletions transactionally.
 Size the volume with headroom and monitor it externally until disk alerts are
 implemented. Changing retention takes effect at the next maintenance run.
 
+## Alert defaults
+
+CPU and memory must remain above 90% for five minutes before firing. Disk usage
+fires warning above 85% and critical above 95%. An agent is offline after 120
+seconds without a report. `alert_cooldown` defaults to 30 minutes. These values
+are configurable in `server.yaml`; restart the server after changes.
+
 ## Start and inspect services
 
 ```bash

@@ -8,8 +8,15 @@
 <input type="hidden" name="csrf_token" value="{{.CSRF}}"><button>Sign out</button></form></header>
 <main>
 {{if .Alerts}}<section><h2>Active alerts</h2><div class="grid">
-{{range .Alerts}}<article class="card critical"><h3>{{.AgentID}} · {{.RuleKey}}</h3>
-<strong>{{printf "%.1f" .Value}}%</strong><p>Threshold {{printf "%.1f" .Threshold}}% · since {{time .StartedAt}}</p></article>{{end}}
+{{range .Alerts}}<article class="card {{.Severity}}"><div class="title">
+<h3>{{.AgentID}} · {{.RuleKey}}{{if .Resource}} · {{.Resource}}{{end}}</h3>
+<span>{{.State}}</span></div>
+<strong>{{printf "%.1f" .Value}}</strong>
+<p>Threshold {{printf "%.1f" .Threshold}} · since {{time .StartedAt}}</p>
+{{if .AcknowledgedAt}}<p class="muted">Acknowledged by {{.AcknowledgedBy}}</p>
+{{else}}<form method="post" action="/api/v1/alerts/{{.ID}}/ack">
+<input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button>Acknowledge</button></form>{{end}}
+</article>{{end}}
 </div></section>{{end}}
 <section><h2>Servers</h2>
 {{if not .Reports}}<p class="empty">No reports received yet.</p>{{end}}
@@ -37,5 +44,11 @@
 {{if .Networks}}<h4>Network</h4><div class="io-list">{{range .Networks}}
 <div><strong>{{.Interface}}</strong><span>RX {{rate .ReceiveBytesRate}}</span>
 <span>TX {{rate .TransmitBytesRate}}</span></div>{{end}}</div>{{end}}
-</article>{{end}}</div></section></main></body></html>
+</article>{{end}}</div></section>
+{{if .AlertHistory}}<section><h2>Alert history</h2><div class="alert-history">
+{{range .AlertHistory}}<div><strong>{{.AgentID}} · {{.RuleKey}}{{if .Resource}} · {{.Resource}}{{end}}</strong>
+<span class="{{.Severity}}">{{.Severity}}</span><span>{{time .StartedAt}}</span>
+<span>{{if .ResolvedAt}}resolved {{time .ResolvedAt}}{{end}}</span></div>{{end}}
+</div></section>{{end}}
+</main></body></html>
 {{end}}

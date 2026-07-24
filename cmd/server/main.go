@@ -66,6 +66,7 @@ func main() {
 	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go runMaintenance(stopCtx, store, cfg, logger)
+	go app.Run(stopCtx)
 	go func() {
 		<-stopCtx.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
