@@ -24,11 +24,14 @@
 - Per-device disk I/O and per-interface network throughput.
 - Pending/firing/resolved CPU, RAM, disk and offline alert rules.
 - Notification retry, cooldown, recovery mail, acknowledgement and history.
+- Optional systemd, Docker, HTTP/TLS and TCP checks.
+- Service/container, three-consecutive HTTP failure and TLS-expiry rules.
+- Responsive dashboard status lists for all optional integrations.
 
 ### Deferred to later milestones
 
-- Service, Docker, HTTP, TCP and TLS collectors.
-- Multi-host dashboard, alert pending durations/cooldowns and acknowledgement.
+- Durable on-disk agent outage buffer.
+- Expanded multi-host administration and token rotation UI.
 - Amazon SES API integration (SES SMTP works in the MVP).
 - Installer/updater/uninstaller automation beyond safe starter scripts.
 
@@ -44,7 +47,7 @@
 
 ## Next milestones
 
-1. systemd, Docker, HTTP/TLS and TCP collectors with least-privilege guidance.
+1. Durable bounded agent spool for outages and crash recovery.
 2. Multi-agent administration, token rotation UI and audit browser.
 
 No deferred critical security behavior is represented as a TODO in executable

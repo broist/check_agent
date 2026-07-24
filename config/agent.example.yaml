@@ -9,3 +9,19 @@ queue_size: 60
 state_file: /var/lib/monitorozo-agent/sequence
 insecure_dev_http: false
 
+# Optional checks. Omit any section you do not need.
+systemd_services:
+  - nginx.service
+  - my-app.service
+docker:
+  enabled: false
+  socket: /var/run/docker.sock
+  timeout: 3s
+http_checks:
+  - name: public-site
+    url: https://example.com/health
+    timeout: 3s
+tcp_checks:
+  - name: local-postgresql
+    address: 127.0.0.1:5432
+    timeout: 3s

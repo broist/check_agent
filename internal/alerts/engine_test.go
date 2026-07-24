@@ -113,6 +113,99 @@ func TestDiskSeverityAndOfflineRule(t *testing.T) {
 	}
 }
 
+func TestIntegrationRulesAndThreeConsecutiveHTTPFailures(t *testing.T) {
+	store := newTestStore(t)
+	cfg := config.Server{
+		CPUAlertThreshold: 90, MemoryAlertThreshold: 90,
+		HighUsageDuration: 5 * time.Minute, DiskWarningThreshold: 85,
+		DiskCriticalThreshold: 95, AgentOfflineAfter: 2 * time.Minute,
+	}
+	engine := New(store, cfg)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	tlsDays := 10.0
+	report := model.Report{
+		AgentID: "node-01", Memory: model.Memory{UsedPercent: 20},
+		Services: []model.ServiceStatus{
+			{Name: "nginx.service", ActiveState: "failed", SubState: "failed"},
+		},
+		Docker: model.DockerStatus{
+			Enabled: true, Available: true,
+			Containers: []model.ContainerStatus{
+				{Name: "api", State: "exited"},
+				{Name: "worker", State: "running", Health: "unhealthy"},
+			},
+		},
+		HTTPChecks: []model.HTTPStatus{
+			{Name: "site", URL: "https://example.test/health", OK: false, TLSDaysLeft: &tlsDays},
+		},
+	}
+	for index := 0; index < 2; index++ {
+		if err := engine.EvaluateReport(ctx, report, now.Add(time.Duration(index)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active, err := store.ActiveAlerts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAlertState(t, active, "http_failed", "pending")
+	assertAlertState(t, active, "systemd_unavailable", "firing")
+	assertAlertState(t, active, "docker_stopped", "firing")
+	assertAlertState(t, active, "docker_unhealthy", "firing")
+	assertAlertState(t, active, "tls_expiring", "firing")
+
+	if err := engine.EvaluateReport(ctx, report, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	active, err = store.ActiveAlerts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAlertState(t, active, "http_failed", "firing")
+
+	report.Services[0].ActiveState = "unknown"
+	report.Services[0].Error = "systemctl timeout"
+	if err := engine.EvaluateReport(ctx, report, now.Add(2500*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	active, err = store.ActiveAlerts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAlertState(t, active, "systemd_unavailable", "firing")
+
+	report.Services[0].ActiveState = "active"
+	report.Services[0].Error = ""
+	report.Docker.Containers = nil
+	report.HTTPChecks[0].OK = true
+	report.HTTPChecks[0].StatusCode = 204
+	tlsDays = 30
+	if err := engine.EvaluateReport(ctx, report, now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	active, err = store.ActiveAlerts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("expected all integration alerts resolved, got %+v", active)
+	}
+}
+
+func assertAlertState(t *testing.T, alerts []storage.Alert, rule, state string) {
+	t.Helper()
+	for _, alert := range alerts {
+		if alert.RuleKey == rule {
+			if alert.State != state {
+				t.Fatalf("%s state=%s, want %s", rule, alert.State, state)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing alert %s in %+v", rule, alerts)
+}
+
 func newTestStore(t *testing.T) *storage.Store {
 	t.Helper()
 	store, err := storage.Open(filepath.Join(t.TempDir(), "alerts.db"))

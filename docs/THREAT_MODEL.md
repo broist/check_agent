@@ -25,7 +25,8 @@
 | SMTP credential leakage | account compromise | environment-only secret; redacted logging | process environment readable to privileged users |
 | Malicious proxy headers | auth/rate-limit bypass | proxy headers ignored unless trusted proxy is configured | configure exact loopback proxy CIDRs only |
 | Agent privilege escalation | host compromise | dedicated unprivileged user, systemd sandbox, read-only collection | kernel pseudo-files expose host metadata |
-| Docker socket access | root-equivalent host control | not used in MVP; explicit warning | use a constrained proxy if later enabled |
+| Docker socket access | root-equivalent host control | disabled by default; explicit opt-in and warning; read-only client behavior | daemon authorization still grants more than the agent uses; prefer a constrained proxy |
+| Probe target abuse/secret leakage | internal network scanning or credentials stored in telemetry | strict count/name/URL/address validation, per-probe deadlines, URL userinfo rejection and query redaction | configuration editors can still select sensitive internal targets |
 | SQLite corruption/loss | history loss | WAL, busy timeout, online backup procedure | single-node design has no HA |
 | Dependency compromise | binary compromise | few pinned Go modules, CI verification | review and update dependencies regularly |
 

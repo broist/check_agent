@@ -40,17 +40,19 @@ type Alert struct {
 	AcknowledgedBy    string
 	NotificationState string
 	LastNotifiedAt    *time.Time
+	ViolationCount    int
 }
 
 type RuleEvaluation struct {
-	AgentID   string
-	RuleKey   string
-	Resource  string
-	Severity  string
-	Value     float64
-	Threshold float64
-	Violated  bool
-	For       time.Duration
+	AgentID     string
+	RuleKey     string
+	Resource    string
+	Severity    string
+	Value       float64
+	Threshold   float64
+	Violated    bool
+	For         time.Duration
+	Consecutive int
 }
 
 type AgentLastSeen struct {
@@ -411,7 +413,7 @@ func (s *Store) AlertHistory(ctx context.Context, limit int) ([]Alert, error) {
 
 const alertColumns = `id, agent_id, rule_key, resource, severity, state, value,
 	threshold, started_at, firing_at, resolved_at, acknowledged_at,
-	acknowledged_by, notification_state, last_notified_at`
+	acknowledged_by, notification_state, last_notified_at, violation_count`
 
 func (s *Store) queryAlerts(ctx context.Context, query string, args ...any) ([]Alert, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -441,7 +443,7 @@ func scanAlert(scanner rowScanner) (Alert, error) {
 	err := scanner.Scan(&item.ID, &item.AgentID, &item.RuleKey, &item.Resource,
 		&item.Severity, &item.State, &item.Value, &item.Threshold, &started,
 		&firing, &resolved, &acknowledged, &acknowledgedBy,
-		&item.NotificationState, &lastNotified)
+		&item.NotificationState, &lastNotified, &item.ViolationCount)
 	if err != nil {
 		return item, err
 	}
@@ -488,7 +490,7 @@ func (s *Store) ApplyRule(ctx context.Context, evaluation RuleEvaluation, now ti
 		state := "pending"
 		notification := "none"
 		var firingAt any
-		if evaluation.For <= 0 {
+		if evaluation.For <= 0 && evaluation.Consecutive <= 1 {
 			state = "firing"
 			notification = "pending"
 			firingAt = now.Format(time.RFC3339Nano)
@@ -507,12 +509,16 @@ func (s *Store) ApplyRule(ctx context.Context, evaluation RuleEvaluation, now ti
 		}
 		changed = true
 	} else if evaluation.Violated && hasActive {
-		if existing.State == "pending" && now.Sub(existing.StartedAt) >= evaluation.For {
+		nextCount := existing.ViolationCount + 1
+		reachedCount := evaluation.Consecutive > 1 && nextCount >= evaluation.Consecutive
+		reachedDuration := evaluation.Consecutive <= 1 &&
+			now.Sub(existing.StartedAt) >= evaluation.For
+		if existing.State == "pending" && (reachedCount || reachedDuration) {
 			_, err := tx.ExecContext(ctx, `UPDATE alerts SET state='firing',
 				firing_at=?, severity=?, value=?, threshold=?,
-				notification_state='pending' WHERE id=?`,
+				notification_state='pending', violation_count=? WHERE id=?`,
 				now.Format(time.RFC3339Nano), evaluation.Severity,
-				evaluation.Value, evaluation.Threshold, existing.ID)
+				evaluation.Value, evaluation.Threshold, nextCount, existing.ID)
 			if err != nil {
 				return false, err
 			}
@@ -522,8 +528,8 @@ func (s *Store) ApplyRule(ctx context.Context, evaluation RuleEvaluation, now ti
 			changed = true
 		} else {
 			_, err := tx.ExecContext(ctx, `UPDATE alerts SET severity=?, value=?,
-				threshold=? WHERE id=?`, evaluation.Severity, evaluation.Value,
-				evaluation.Threshold, existing.ID)
+				threshold=?, violation_count=? WHERE id=?`, evaluation.Severity,
+				evaluation.Value, evaluation.Threshold, nextCount, existing.ID)
 			if err != nil {
 				return false, err
 			}

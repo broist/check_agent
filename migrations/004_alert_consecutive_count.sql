@@ -1,0 +1,1 @@
+ALTER TABLE alerts ADD COLUMN violation_count INTEGER NOT NULL DEFAULT 1;

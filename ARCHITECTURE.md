@@ -12,9 +12,9 @@ This milestone implements the first production-oriented vertical slice:
 5. a configurable CPU threshold can create an alert and send SMTP mail;
 6. both binaries can run as hardened systemd services.
 
-Docker, systemd-service, HTTP/TCP/TLS probes, aggregation, SSE, alert
-acknowledgement and token self-service are explicitly deferred until this slice
-is proven. The schema and package boundaries leave room for them.
+The MVP gate has been passed. Aggregation, SSE, alert acknowledgement and
+optional systemd, Docker, HTTP/TCP/TLS checks are now implemented. Token
+self-service remains an operator configuration workflow.
 
 ## Components
 
@@ -47,6 +47,14 @@ calculated from successive `/proc/diskstats` and `/proc/net/dev` counters,
 including safe handling of counter resets. Filesystems are discovered through
 `/proc/self/mountinfo`, filtered to real filesystems, and measured with
 `unix.Statfs`.
+
+`internal/checks` runs configured probes concurrently with per-check deadlines.
+It invokes `systemctl show` directly (without a shell) only for explicitly
+listed units, queries the read-only Docker HTTP API over its Unix socket,
+performs bounded HTTP(S) requests with TLS verification, and uses timed TCP
+dials. URL userinfo is rejected and query strings are removed from telemetry
+and error messages. A missing Docker socket is reported as an unavailable
+integration rather than failing base metric collection.
 
 Reports are placed in a fixed-capacity in-memory FIFO. The sender retries with
 capped exponential backoff and jitter. When the queue is full, the oldest
@@ -81,7 +89,8 @@ and per-IP login throttling. Security headers are applied globally.
 ### Alert flow
 
 The rule engine evaluates CPU and memory duration thresholds, per-mount disk
-warning/critical thresholds and agent-offline state. Rules move through
+warning/critical thresholds, agent-offline state, selected systemd services,
+Docker state/health, three consecutive HTTP failures, and TLS lifetime. Rules move through
 `pending`, `firing` and `resolved`; every transition is audited. Notifications
 are stored before delivery, retried by one bounded background worker and
 deduplicated with a configurable cooldown. Firing and recovery e-mails contain
@@ -108,8 +117,8 @@ passwords use `monitorozo-server hash-password`.
 - Only `/healthz`, `/login` and the ingestion endpoint are unauthenticated.
 - The agent service has no write access outside its state directory.
 - The server service can write only its state directory.
-- Access to `/var/run/docker.sock` is not granted in the MVP. Future Docker
-  monitoring must document that this is effectively root-equivalent access.
+- Docker checks are disabled by default. Enabling them requires Unix-socket
+  access, which is effectively root-equivalent on a standard Docker daemon.
 
 See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for abuse cases and controls.
 
@@ -123,7 +132,8 @@ deployment keeps the previous binary to permit rollback.
 ## Resource targets
 
 - Agent steady-state RSS target: below 30 MiB.
-- No polling subprocesses.
+- Base metrics use no subprocesses; optional systemd checks execute bounded
+  `systemctl show` subprocesses for configured units.
 - Default collection period: 10 seconds (hard minimum: 5 seconds).
 - Bounded report body: 256 KiB.
 - Bounded queue, request deadlines and capped database connections.

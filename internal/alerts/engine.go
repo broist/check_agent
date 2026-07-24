@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/broist/check_agent/internal/config"
@@ -38,6 +39,9 @@ func (e *Engine) EvaluateReport(ctx context.Context, report model.Report, now ti
 			Value: 0, Threshold: e.cfg.AgentOfflineAfter.Seconds(), Violated: false,
 		},
 	}
+	seen := make(map[string]bool)
+	httpResources := make(map[string]model.HTTPStatus)
+	serviceResources := make(map[string]model.ServiceStatus)
 	for _, filesystem := range report.Filesystems {
 		rules = append(rules,
 			storage.RuleEvaluation{
@@ -55,9 +59,105 @@ func (e *Engine) EvaluateReport(ctx context.Context, report model.Report, now ti
 			},
 		)
 	}
+	for _, service := range report.Services {
+		serviceResources[service.Name] = service
+		if service.Error != "" || service.ActiveState == "" || service.ActiveState == "unknown" {
+			continue
+		}
+		rules = append(rules, storage.RuleEvaluation{
+			AgentID: report.AgentID, RuleKey: "systemd_unavailable",
+			Resource: service.Name, Severity: "critical", Value: boolValue(
+				service.ActiveState == "failed" || service.ActiveState == "inactive"),
+			Threshold: 1, Violated: service.ActiveState == "failed" ||
+				service.ActiveState == "inactive",
+		})
+	}
+	for _, container := range report.Docker.Containers {
+		rules = append(rules,
+			storage.RuleEvaluation{
+				AgentID: report.AgentID, RuleKey: "docker_stopped",
+				Resource: container.Name, Severity: "critical",
+				Value: boolValue(container.State != "running"), Threshold: 1,
+				Violated: container.State != "running",
+			},
+			storage.RuleEvaluation{
+				AgentID: report.AgentID, RuleKey: "docker_unhealthy",
+				Resource: container.Name, Severity: "critical",
+				Value: boolValue(container.Health == "unhealthy"), Threshold: 1,
+				Violated: container.Health == "unhealthy",
+			},
+		)
+	}
+	for _, check := range report.HTTPChecks {
+		httpResources[check.Name] = check
+		rules = append(rules, storage.RuleEvaluation{
+			AgentID: report.AgentID, RuleKey: "http_failed",
+			Resource: check.Name, Severity: "critical",
+			Value: float64(check.StatusCode), Threshold: 399,
+			Violated: !check.OK, Consecutive: 3,
+		})
+		if check.TLSDaysLeft != nil {
+			severity := "warning"
+			if *check.TLSDaysLeft <= 3 {
+				severity = "critical"
+			}
+			rules = append(rules, storage.RuleEvaluation{
+				AgentID: report.AgentID, RuleKey: "tls_expiring",
+				Resource: check.Name, Severity: severity,
+				Value: *check.TLSDaysLeft, Threshold: 14,
+				Violated: *check.TLSDaysLeft <= 14,
+			})
+		}
+	}
 	for _, rule := range rules {
+		seen[ruleKey(rule.RuleKey, rule.Resource)] = true
 		if _, err := e.store.ApplyRule(ctx, rule, now); err != nil {
 			return fmt.Errorf("apply rule %s/%s: %w", rule.RuleKey, rule.Resource, err)
+		}
+	}
+	return e.resolveMissing(ctx, report, seen, httpResources, serviceResources, now)
+}
+
+func (e *Engine) resolveMissing(
+	ctx context.Context,
+	report model.Report,
+	seen map[string]bool,
+	httpResources map[string]model.HTTPStatus,
+	serviceResources map[string]model.ServiceStatus,
+	now time.Time,
+) error {
+	active, err := e.store.ActiveAlerts(ctx)
+	if err != nil {
+		return err
+	}
+	for _, alert := range active {
+		if alert.AgentID != report.AgentID || seen[ruleKey(alert.RuleKey, alert.Resource)] {
+			continue
+		}
+		resolve := false
+		switch alert.RuleKey {
+		case "disk_warning", "disk_critical", "http_failed":
+			resolve = true
+		case "systemd_unavailable":
+			service, exists := serviceResources[alert.Resource]
+			resolve = !exists || (service.Error == "" &&
+				service.ActiveState != "" && service.ActiveState != "unknown")
+		case "docker_stopped", "docker_unhealthy":
+			resolve = !report.Docker.Enabled || report.Docker.Available
+		case "tls_expiring":
+			check, exists := httpResources[alert.Resource]
+			resolve = !exists || strings.HasPrefix(check.URL, "http://")
+		}
+		if !resolve {
+			continue
+		}
+		evaluation := storage.RuleEvaluation{
+			AgentID: alert.AgentID, RuleKey: alert.RuleKey, Resource: alert.Resource,
+			Severity: alert.Severity, Value: 0, Threshold: alert.Threshold,
+		}
+		if _, err := e.store.ApplyRule(ctx, evaluation, now); err != nil {
+			return fmt.Errorf("resolve missing rule %s/%s: %w",
+				alert.RuleKey, alert.Resource, err)
 		}
 	}
 	return nil
@@ -83,4 +183,15 @@ func (e *Engine) EvaluateOffline(ctx context.Context, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+func boolValue(value bool) float64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func ruleKey(rule, resource string) string {
+	return rule + "\x00" + resource
 }

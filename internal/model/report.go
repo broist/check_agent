@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -12,26 +14,31 @@ const (
 	MaxFilesystems = 128
 	MaxDiskDevices = 128
 	MaxInterfaces  = 128
+	MaxChecks      = 32
 	MaxAgentIDLen  = 128
 )
 
 type Report struct {
-	AgentID     string       `json:"agent_id"`
-	Timestamp   time.Time    `json:"timestamp"`
-	Sequence    uint64       `json:"sequence"`
-	Version     string       `json:"version"`
-	Hostname    string       `json:"hostname"`
-	CPUPercent  float64      `json:"cpu_percent"`
-	Load1       float64      `json:"load_1"`
-	Load5       float64      `json:"load_5"`
-	Load15      float64      `json:"load_15"`
-	Memory      Memory       `json:"memory"`
-	Filesystems []Filesystem `json:"filesystems"`
-	DiskIO      []DiskIO     `json:"disk_io"`
-	Networks    []NetworkIO  `json:"networks"`
-	Uptime      uint64       `json:"uptime_seconds"`
-	BootTime    time.Time    `json:"boot_time"`
-	Kernel      string       `json:"kernel"`
+	AgentID     string          `json:"agent_id"`
+	Timestamp   time.Time       `json:"timestamp"`
+	Sequence    uint64          `json:"sequence"`
+	Version     string          `json:"version"`
+	Hostname    string          `json:"hostname"`
+	CPUPercent  float64         `json:"cpu_percent"`
+	Load1       float64         `json:"load_1"`
+	Load5       float64         `json:"load_5"`
+	Load15      float64         `json:"load_15"`
+	Memory      Memory          `json:"memory"`
+	Filesystems []Filesystem    `json:"filesystems"`
+	DiskIO      []DiskIO        `json:"disk_io"`
+	Networks    []NetworkIO     `json:"networks"`
+	Services    []ServiceStatus `json:"services,omitempty"`
+	Docker      DockerStatus    `json:"docker,omitempty"`
+	HTTPChecks  []HTTPStatus    `json:"http_checks,omitempty"`
+	TCPChecks   []TCPStatus     `json:"tcp_checks,omitempty"`
+	Uptime      uint64          `json:"uptime_seconds"`
+	BootTime    time.Time       `json:"boot_time"`
+	Kernel      string          `json:"kernel"`
 }
 
 type Memory struct {
@@ -76,6 +83,52 @@ type NetworkIO struct {
 	TransmitBytesRate  float64 `json:"transmit_bytes_per_second"`
 	ReceivePacketRate  float64 `json:"receive_packets_per_second"`
 	TransmitPacketRate float64 `json:"transmit_packets_per_second"`
+}
+
+type ServiceStatus struct {
+	Name        string `json:"name"`
+	ActiveState string `json:"active_state"`
+	SubState    string `json:"sub_state"`
+	Error       string `json:"error,omitempty"`
+}
+
+type DockerStatus struct {
+	Enabled    bool              `json:"enabled"`
+	Available  bool              `json:"available"`
+	Error      string            `json:"error,omitempty"`
+	Containers []ContainerStatus `json:"containers,omitempty"`
+}
+
+type ContainerStatus struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Health string `json:"health,omitempty"`
+}
+
+type HTTPStatus struct {
+	Name        string   `json:"name"`
+	URL         string   `json:"url"`
+	StatusCode  int      `json:"status_code"`
+	ResponseMS  float64  `json:"response_ms"`
+	OK          bool     `json:"ok"`
+	Error       string   `json:"error,omitempty"`
+	TLSDaysLeft *float64 `json:"tls_days_left,omitempty"`
+}
+
+func (status HTTPStatus) TLSDays() float64 {
+	if status.TLSDaysLeft == nil {
+		return 0
+	}
+	return *status.TLSDaysLeft
+}
+
+type TCPStatus struct {
+	Name       string  `json:"name"`
+	Address    string  `json:"address"`
+	Reachable  bool    `json:"reachable"`
+	ResponseMS float64 `json:"response_ms"`
+	Error      string  `json:"error,omitempty"`
 }
 
 func (r Report) Validate(now time.Time, maxSkew time.Duration) error {
@@ -132,6 +185,51 @@ func (r Report) Validate(now time.Time, maxSkew time.Duration) error {
 			return errors.New("invalid network I/O data")
 		}
 	}
+	if len(r.Services) > MaxChecks || len(r.HTTPChecks) > MaxChecks ||
+		len(r.TCPChecks) > MaxChecks || len(r.Docker.Containers) > MaxChecks {
+		return fmt.Errorf("too many optional check results: maximum is %d per type", MaxChecks)
+	}
+	for _, service := range r.Services {
+		if !validCheckName(service.Name) || len(service.ActiveState) > 64 ||
+			len(service.SubState) > 64 || len(service.Error) > 512 {
+			return errors.New("invalid systemd service status")
+		}
+	}
+	if len(r.Docker.Error) > 512 {
+		return errors.New("invalid Docker status")
+	}
+	for _, container := range r.Docker.Containers {
+		if !validCheckName(container.Name) || len(container.ID) > 128 ||
+			len(container.State) > 64 || len(container.Health) > 64 {
+			return errors.New("invalid Docker container status")
+		}
+	}
+	for _, check := range r.HTTPChecks {
+		if !validCheckName(check.Name) || len(check.URL) > 2048 ||
+			check.StatusCode < 0 || check.StatusCode > 999 ||
+			!validRate(check.ResponseMS) || len(check.Error) > 512 {
+			return errors.New("invalid HTTP check status")
+		}
+		parsed, err := url.ParseRequestURI(check.URL)
+		if err != nil || parsed.Host == "" ||
+			(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return errors.New("HTTP check URL must be a redacted http(s) URL")
+		}
+		if check.TLSDaysLeft != nil && (math.IsNaN(*check.TLSDaysLeft) ||
+			math.IsInf(*check.TLSDaysLeft, 0)) {
+			return errors.New("invalid TLS certificate lifetime")
+		}
+	}
+	for _, check := range r.TCPChecks {
+		if !validCheckName(check.Name) || len(check.Address) > 512 ||
+			!validRate(check.ResponseMS) || len(check.Error) > 512 {
+			return errors.New("invalid TCP check status")
+		}
+		if _, _, err := net.SplitHostPort(check.Address); err != nil {
+			return errors.New("invalid TCP check address")
+		}
+	}
 	return nil
 }
 
@@ -141,7 +239,11 @@ func validRate(value float64) bool {
 
 func safeLabel(value string) bool {
 	return strings.IndexFunc(value, func(r rune) bool {
-		return !(r == '-' || r == '_' || r == '.' ||
+		return !(r == '-' || r == '_' || r == '.' || r == '@' ||
 			r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
 	}) == -1
+}
+
+func validCheckName(value string) bool {
+	return value != "" && len(value) <= 128 && safeLabel(value)
 }

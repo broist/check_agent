@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/broist/check_agent/internal/agent"
+	"github.com/broist/check_agent/internal/checks"
 	"github.com/broist/check_agent/internal/collector"
 	"github.com/broist/check_agent/internal/config"
 	"github.com/broist/check_agent/internal/model"
@@ -34,6 +35,7 @@ func main() {
 		logger.Error("sequence initialization failed", "error", err)
 		os.Exit(1)
 	}
+	runtimeChecks := checks.New(cfg)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	queue := make(chan model.Report, cfg.QueueSize)
@@ -50,6 +52,8 @@ func main() {
 			return
 		}
 		report.AgentID = cfg.AgentID
+		report.Services, report.Docker, report.HTTPChecks, report.TCPChecks =
+			runtimeChecks.Collect(ctx)
 		report.Sequence, err = sequence.Next()
 		if err != nil {
 			logger.Error("sequence update failed", "error", err)

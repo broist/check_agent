@@ -44,6 +44,28 @@
 {{if .Networks}}<h4>Network</h4><div class="io-list">{{range .Networks}}
 <div><strong>{{.Interface}}</strong><span>RX {{rate .ReceiveBytesRate}}</span>
 <span>TX {{rate .TransmitBytesRate}}</span></div>{{end}}</div>{{end}}
+{{if .Services}}<h4>systemd services</h4><div class="status-list">{{range .Services}}
+<div><strong>{{.Name}}</strong>
+<span class="status-pill {{if eq .ActiveState "active"}}ok{{else if eq .ActiveState "failed"}}critical{{else if eq .ActiveState "inactive"}}critical{{else}}unknown{{end}}">
+{{.ActiveState}}{{if .SubState}} / {{.SubState}}{{end}}</span>
+{{if .Error}}<small>{{.Error}}</small>{{end}}</div>{{end}}</div>{{end}}
+{{if .Docker.Enabled}}<h4>Docker</h4>
+{{if not .Docker.Available}}<p class="integration-unavailable">Docker unavailable{{if .Docker.Error}}: {{.Docker.Error}}{{end}}</p>
+{{else}}<div class="status-list">{{range .Docker.Containers}}
+<div><strong>{{.Name}}</strong>
+<span class="status-pill {{if and (eq .State "running") (ne .Health "unhealthy")}}ok{{else}}critical{{end}}">
+{{.State}}{{if .Health}} / {{.Health}}{{end}}</span></div>
+{{else}}<p class="muted">No Docker containers.</p>{{end}}</div>{{end}}{{end}}
+{{if .HTTPChecks}}<h4>HTTP / HTTPS checks</h4><div class="status-list">{{range .HTTPChecks}}
+<div><strong>{{.Name}}</strong><span class="status-pill {{if .OK}}ok{{else}}critical{{end}}">
+{{if .OK}}HTTP {{.StatusCode}}{{else}}failed{{end}} &middot; {{printf "%.0f" .ResponseMS}} ms</span>
+<small>{{.URL}}{{if .TLSDaysLeft}} &middot; TLS {{printf "%.1f" .TLSDays}} days{{end}}{{if .Error}} &middot; {{.Error}}{{end}}</small></div>
+{{end}}</div>{{end}}
+{{if .TCPChecks}}<h4>TCP checks</h4><div class="status-list">{{range .TCPChecks}}
+<div><strong>{{.Name}}</strong><span class="status-pill {{if .Reachable}}ok{{else}}critical{{end}}">
+{{if .Reachable}}reachable{{else}}unreachable{{end}} &middot; {{printf "%.0f" .ResponseMS}} ms</span>
+<small>{{.Address}}{{if .Error}} &middot; {{.Error}}{{end}}</small></div>
+{{end}}</div>{{end}}
 </article>{{end}}</div></section>
 {{if .AlertHistory}}<section><h2>Alert history</h2><div class="alert-history">
 {{range .AlertHistory}}<div><strong>{{.AgentID}} · {{.RuleKey}}{{if .Resource}} · {{.Resource}}{{end}}</strong>

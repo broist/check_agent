@@ -99,15 +99,50 @@ STARTTLS submission endpoint. Restart the server after configuration changes.
 The default `raw_retention: 168h` keeps ten-second reports for seven days.
 Completed hours are aggregated and retained by `aggregate_retention: 2160h`
 for 90 days. Maintenance runs hourly and applies both deletions transactionally.
-Size the volume with headroom and monitor it externally until disk alerts are
-implemented. Changing retention takes effect at the next maintenance run.
+Size the volume with headroom; Monitorozo's disk alerts protect the monitored
+agent, so monitor the central server volume externally as well. Changing
+retention takes effect at the next maintenance run.
 
 ## Alert defaults
 
 CPU and memory must remain above 90% for five minutes before firing. Disk usage
 fires warning above 85% and critical above 95%. An agent is offline after 120
-seconds without a report. `alert_cooldown` defaults to 30 minutes. These values
-are configurable in `server.yaml`; restart the server after changes.
+seconds without a report. Failed/inactive configured systemd units, stopped or
+unhealthy Docker containers, three consecutive HTTP failures, and TLS
+certificates with at most 14 days remaining also fire alerts.
+`alert_cooldown` defaults to 30 minutes. These values are configurable in
+`server.yaml`; restart the server after changes.
+
+## Optional agent checks
+
+Configure only the checks needed on the production host. Every HTTP/TCP/Docker
+operation has a deadline; HTTP URLs must not contain embedded credentials and
+query strings are redacted from stored telemetry. The agent calls
+`systemctl show` without a shell for each configured service.
+
+```yaml
+systemd_services:
+  - nginx.service
+docker:
+  enabled: false
+  socket: /var/run/docker.sock
+  timeout: 3s
+http_checks:
+  - name: public-site
+    url: https://example.com/health
+    timeout: 3s
+tcp_checks:
+  - name: local-postgresql
+    address: 127.0.0.1:5432
+    timeout: 3s
+```
+
+The base agent remains healthy when Docker is disabled or its socket is
+unavailable. A typical systemd unit status query needs no extra privilege.
+Docker socket access is different: membership in the `docker` group normally
+grants root-equivalent control. Prefer leaving Docker checks disabled or
+placing a separately maintained, read-only authorization proxy in front of the
+daemon; never expose the unauthenticated Docker API over TCP.
 
 ## Start and inspect services
 
@@ -189,6 +224,6 @@ the retained `/etc/monitorozo`, `/var/lib/monitorozo-agent` and
 
 ## Privilege note
 
-Base collection does not require root. Do not add the agent to the `docker`
-group merely for monitoring: access to `docker.sock` normally permits
-root-equivalent host control.
+Base, systemd, HTTP and TCP collection does not require root. Do not add the
+agent to the `docker` group merely for convenience: access to `docker.sock`
+normally permits root-equivalent host control.

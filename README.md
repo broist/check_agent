@@ -1,13 +1,15 @@
 # Monitorozo
 
 Monitorozo is a small, self-hosted Linux monitoring system written in Go. This
-repository currently contains the first end-to-end MVP: a lightweight agent,
+repository contains a production-oriented monitoring stack: a lightweight agent,
 authenticated ingestion server, SQLite persistence, secure dashboard and a CPU
 threshold SMTP alert. It also includes authenticated live updates, CPU/RAM
 history charts, seven-day raw retention, 90-day hourly aggregates, disk I/O
 rates and per-interface network throughput. Its alert engine supports
 pending/firing/resolved CPU, memory, disk and offline rules, cooldown,
 delivery retry, recovery mail, acknowledgement and history.
+Optional checks cover selected systemd units, Docker containers and health,
+HTTP/HTTPS status and latency, TLS certificate lifetime, and TCP reachability.
 
 The exact scope and intentional deferrals are in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Do not expose development HTTP
@@ -20,9 +22,10 @@ cmd/agent              agent executable
 cmd/server             server executable and credential utilities
 internal/agent         delivery queue, sequence state and retry
 internal/collector     /proc and statfs Linux collectors
+internal/checks        optional systemd, Docker, HTTP/TLS and TCP checks
 internal/server        HTTP API, dashboard and security middleware
 internal/storage       SQLite migrations and queries
-internal/alerts        reserved for the full rule engine milestone
+internal/alerts        alert rule engine and lifecycle evaluation
 internal/email         STARTTLS SMTP delivery
 internal/auth          token hashing, sessions and rate limiting
 internal/config        strict YAML plus environment overrides
