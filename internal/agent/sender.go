@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/example/monitorozo/internal/model"
+	"github.com/broist/check_agent/internal/model"
 )
 
 type Sender struct {

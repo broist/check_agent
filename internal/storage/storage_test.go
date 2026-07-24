@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/monitorozo/internal/config"
-	"github.com/example/monitorozo/internal/model"
+	"github.com/broist/check_agent/internal/config"
+	"github.com/broist/check_agent/internal/model"
 )
 
 func TestMaintainAggregatesAndRetainsMetrics(t *testing.T) {

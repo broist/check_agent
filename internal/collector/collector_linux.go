@@ -11,15 +11,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/monitorozo/internal/model"
-	"github.com/example/monitorozo/internal/version"
+	"github.com/broist/check_agent/internal/model"
+	"github.com/broist/check_agent/internal/version"
 	"golang.org/x/sys/unix"
 )
 
 type Collector struct {
-	mu       sync.Mutex
-	previous cpuTimes
-	fsTypes  map[string]bool
+	mu              sync.Mutex
+	previousCPU     cpuTimes
+	previousDisk    map[string]diskCounters
+	previousNetwork map[string]networkCounters
+	previousAt      time.Time
+	fsTypes         map[string]bool
 }
 
 func New(includeFSTypes []string) (*Collector, error) {
@@ -27,11 +30,22 @@ func New(includeFSTypes []string) (*Collector, error) {
 	for _, value := range includeFSTypes {
 		c.fsTypes[value] = true
 	}
-	current, err := readCPU()
+	currentCPU, err := readCPU()
 	if err != nil {
 		return nil, err
 	}
-	c.previous = current
+	currentDisk, err := readDiskCounters()
+	if err != nil {
+		return nil, err
+	}
+	currentNetwork, err := readNetworkCounters()
+	if err != nil {
+		return nil, err
+	}
+	c.previousCPU = currentCPU
+	c.previousDisk = currentDisk
+	c.previousNetwork = currentNetwork
+	c.previousAt = time.Now().UTC()
 	return c, nil
 }
 
@@ -39,12 +53,26 @@ func (c *Collector) Collect() (model.Report, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	current, err := readCPU()
+	currentCPU, err := readCPU()
 	if err != nil {
 		return model.Report{}, err
 	}
-	cpu := cpuPercent(c.previous, current)
-	c.previous = current
+	currentDisk, err := readDiskCounters()
+	if err != nil {
+		return model.Report{}, err
+	}
+	currentNetwork, err := readNetworkCounters()
+	if err != nil {
+		return model.Report{}, err
+	}
+	sampledAt := time.Now().UTC()
+	elapsed := sampledAt.Sub(c.previousAt).Seconds()
+	if elapsed < 1 {
+		elapsed = 1
+	}
+	cpu := cpuPercent(c.previousCPU, currentCPU)
+	diskIO := calculateDiskIO(c.previousDisk, currentDisk, elapsed)
+	networkIO := calculateNetworkIO(c.previousNetwork, currentNetwork, elapsed)
 
 	memoryFile, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -75,11 +103,16 @@ func (c *Collector) Collect() (model.Report, error) {
 	if err != nil {
 		return model.Report{}, fmt.Errorf("hostname: %w", err)
 	}
+	c.previousCPU = currentCPU
+	c.previousDisk = currentDisk
+	c.previousNetwork = currentNetwork
+	c.previousAt = sampledAt
 	return model.Report{
-		Timestamp: time.Now().UTC(), Version: version.Version, Hostname: hostname,
+		Timestamp: sampledAt, Version: version.Version, Hostname: hostname,
 		CPUPercent: cpu, Load1: load1, Load5: load5, Load15: load15,
-		Memory: memory, Filesystems: filesystems, Uptime: uint64(uptime),
-		BootTime: time.Now().UTC().Add(-time.Duration(uptime) * time.Second),
+		Memory: memory, Filesystems: filesystems, DiskIO: diskIO, Networks: networkIO,
+		Uptime:   uint64(uptime),
+		BootTime: sampledAt.Add(-time.Duration(uptime) * time.Second),
 		Kernel:   kernelVersion(),
 	}, nil
 }
@@ -91,6 +124,43 @@ func readCPU() (cpuTimes, error) {
 	}
 	defer file.Close()
 	return parseCPU(file)
+}
+
+func readDiskCounters() (map[string]diskCounters, error) {
+	file, err := os.Open("/proc/diskstats")
+	if err != nil {
+		return nil, fmt.Errorf("open diskstats: %w", err)
+	}
+	defer file.Close()
+	values, err := parseDiskStats(file)
+	if err != nil {
+		return nil, err
+	}
+	for name := range values {
+		if !trackBlockDevice(name) {
+			delete(values, name)
+		}
+	}
+	return values, nil
+}
+
+func readNetworkCounters() (map[string]networkCounters, error) {
+	file, err := os.Open("/proc/net/dev")
+	if err != nil {
+		return nil, fmt.Errorf("open network stats: %w", err)
+	}
+	defer file.Close()
+	return parseNetworkStats(file)
+}
+
+func trackBlockDevice(name string) bool {
+	for _, prefix := range []string{"loop", "ram", "fd"} {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	_, err := os.Stat("/sys/class/block/" + name + "/partition")
+	return os.IsNotExist(err)
 }
 
 func readUptime() (float64, error) {

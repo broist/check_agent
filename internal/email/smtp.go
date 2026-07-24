@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/monitorozo/internal/config"
-	"github.com/example/monitorozo/internal/storage"
+	"github.com/broist/check_agent/internal/config"
+	"github.com/broist/check_agent/internal/storage"
 )
 
 type Sender struct {

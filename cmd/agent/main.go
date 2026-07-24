@@ -9,10 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/monitorozo/internal/agent"
-	"github.com/example/monitorozo/internal/collector"
-	"github.com/example/monitorozo/internal/config"
-	"github.com/example/monitorozo/internal/model"
+	"github.com/broist/check_agent/internal/agent"
+	"github.com/broist/check_agent/internal/collector"
+	"github.com/broist/check_agent/internal/config"
+	"github.com/broist/check_agent/internal/model"
 )
 
 func main() {

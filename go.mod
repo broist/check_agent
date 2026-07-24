@@ -1,4 +1,4 @@
-module github.com/example/monitorozo
+module github.com/broist/check_agent
 
 go 1.24
 

@@ -31,5 +31,11 @@
 <h4>Filesystems</h4><div class="filesystems">{{range .Filesystems}}
 <div><span>{{.Mountpoint}}</span><progress max="100" value="{{.UsedPercent}}"></progress>
 <strong>{{printf "%.1f" .UsedPercent}}%</strong></div>{{end}}</div>
+{{if .DiskIO}}<h4>Disk I/O</h4><div class="io-list">{{range .DiskIO}}
+<div><strong>{{.Device}}</strong><span>Read {{rate .ReadBytesPerSecond}}</span>
+<span>Write {{rate .WriteBytesPerSecond}}</span></div>{{end}}</div>{{end}}
+{{if .Networks}}<h4>Network</h4><div class="io-list">{{range .Networks}}
+<div><strong>{{.Interface}}</strong><span>RX {{rate .ReceiveBytesRate}}</span>
+<span>TX {{rate .TransmitBytesRate}}</span></div>{{end}}</div>{{end}}
 </article>{{end}}</div></section></main></body></html>
 {{end}}

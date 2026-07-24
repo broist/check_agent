@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/monitorozo/internal/auth"
-	"github.com/example/monitorozo/internal/config"
-	"github.com/example/monitorozo/internal/email"
-	appserver "github.com/example/monitorozo/internal/server"
-	"github.com/example/monitorozo/internal/storage"
+	"github.com/broist/check_agent/internal/auth"
+	"github.com/broist/check_agent/internal/config"
+	"github.com/broist/check_agent/internal/email"
+	appserver "github.com/broist/check_agent/internal/server"
+	"github.com/broist/check_agent/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
 

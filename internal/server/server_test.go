@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/monitorozo/internal/auth"
-	"github.com/example/monitorozo/internal/config"
-	"github.com/example/monitorozo/internal/model"
-	"github.com/example/monitorozo/internal/storage"
+	"github.com/broist/check_agent/internal/auth"
+	"github.com/broist/check_agent/internal/config"
+	"github.com/broist/check_agent/internal/model"
+	"github.com/broist/check_agent/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -71,6 +71,12 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 		AgentID: "test-01", Timestamp: time.Now().UTC(), Sequence: 1,
 		Version: "test", Hostname: "test", CPUPercent: 91,
 		Memory: model.Memory{UsedPercent: 50}, Uptime: 100,
+		DiskIO: []model.DiskIO{{
+			Device: "xvda", ReadBytesPerSecond: 1024, WriteBytesPerSecond: 2048,
+		}},
+		Networks: []model.NetworkIO{{
+			Interface: "eth0", ReceiveBytesRate: 4096, TransmitBytesRate: 8192,
+		}},
 	}
 	body, _ := json.Marshal(report)
 	send := func(requestToken string) *httptest.ResponseRecorder {
@@ -88,7 +94,9 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 		t.Fatalf("expected firing alert notification, got %+v", mailer.alerts)
 	}
 	reports, err := store.LatestReports(context.Background())
-	if err != nil || len(reports) != 1 || reports[0].Sequence != 1 {
+	if err != nil || len(reports) != 1 || reports[0].Sequence != 1 ||
+		len(reports[0].DiskIO) != 1 || reports[0].DiskIO[0].WriteBytesPerSecond != 2048 ||
+		len(reports[0].Networks) != 1 || reports[0].Networks[0].TransmitBytesRate != 8192 {
 		t.Fatalf("stored reports: %+v, err=%v", reports, err)
 	}
 	if response := send(rotatedToken); response.Code != http.StatusConflict {

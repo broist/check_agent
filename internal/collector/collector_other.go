@@ -5,7 +5,7 @@ package collector
 import (
 	"errors"
 
-	"github.com/example/monitorozo/internal/model"
+	"github.com/broist/check_agent/internal/model"
 )
 
 type Collector struct{}

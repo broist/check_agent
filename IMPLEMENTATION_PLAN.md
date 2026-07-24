@@ -21,6 +21,7 @@
 - Authenticated SSE report notifications.
 - CPU/RAM history API and dependency-free canvas charts.
 - Seven-day raw retention and 90-day hourly aggregates.
+- Per-device disk I/O and per-interface network throughput.
 
 ### Deferred to later milestones
 
@@ -41,10 +42,9 @@
 
 ## Next milestones
 
-1. Network and disk-I/O metrics.
-2. Pending-duration/cooldown rules and alert acknowledgement.
-3. systemd, Docker, HTTP/TLS and TCP collectors with least-privilege guidance.
-4. Multi-agent administration, token rotation UI and audit browser.
+1. Pending-duration/cooldown rules and alert acknowledgement.
+2. systemd, Docker, HTTP/TLS and TCP collectors with least-privilege guidance.
+3. Multi-agent administration, token rotation UI and audit browser.
 
 No deferred critical security behavior is represented as a TODO in executable
 code. Deferred features remain documented product scope.

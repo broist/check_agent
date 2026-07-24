@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -17,5 +18,10 @@ func TestReportValidate(t *testing.T) {
 	report.AgentID = "../bad"
 	if err := report.Validate(now, 2*time.Minute); err == nil {
 		t.Fatal("unsafe agent ID accepted")
+	}
+	report.AgentID = "web-01"
+	report.Networks = []NetworkIO{{Interface: "eth0", ReceiveBytesRate: math.NaN()}}
+	if err := report.Validate(now, 2*time.Minute); err == nil {
+		t.Fatal("non-finite network rate accepted")
 	}
 }

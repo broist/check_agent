@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/example/monitorozo/internal/model"
+	"github.com/broist/check_agent/internal/model"
 )
 
 type cpuTimes struct {

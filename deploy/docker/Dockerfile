@@ -8,7 +8,7 @@ COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath \
-    -ldflags="-s -w -X github.com/example/monitorozo/internal/version.Version=${VERSION} -X github.com/example/monitorozo/internal/version.Commit=${COMMIT} -X github.com/example/monitorozo/internal/version.BuildTime=${BUILD_TIME}" \
+    -ldflags="-s -w -X github.com/broist/check_agent/internal/version.Version=${VERSION} -X github.com/broist/check_agent/internal/version.Commit=${COMMIT} -X github.com/broist/check_agent/internal/version.BuildTime=${BUILD_TIME}" \
     -o /out/monitorozo-server ./cmd/server
 
 FROM gcr.io/distroless/static-debian12:nonroot

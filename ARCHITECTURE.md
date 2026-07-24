@@ -42,7 +42,9 @@ monitorozo-agent -- bounded memory queue -- HTTPS POST /api/v1/reports
 `cmd/agent` wires configuration, structured JSON logging, signal handling,
 collection and delivery. `internal/collector` reads Linux kernel interfaces
 without invoking shell commands. CPU utilization is computed from two
-successive `/proc/stat` samples. Filesystems are discovered through
+successive `/proc/stat` samples. Disk I/O and interface traffic rates are
+calculated from successive `/proc/diskstats` and `/proc/net/dev` counters,
+including safe handling of counter resets. Filesystems are discovered through
 `/proc/self/mountinfo`, filtered to real filesystems, and measured with
 `unix.Statfs`.
 

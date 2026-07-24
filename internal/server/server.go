@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/monitorozo/internal/auth"
-	"github.com/example/monitorozo/internal/config"
-	"github.com/example/monitorozo/internal/model"
-	"github.com/example/monitorozo/internal/storage"
-	"github.com/example/monitorozo/web"
+	"github.com/broist/check_agent/internal/auth"
+	"github.com/broist/check_agent/internal/config"
+	"github.com/broist/check_agent/internal/model"
+	"github.com/broist/check_agent/internal/storage"
+	"github.com/broist/check_agent/web"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -53,6 +53,15 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 		"time": func(value time.Time) string { return value.Local().Format("2006-01-02 15:04:05") },
 		"duration": func(seconds uint64) string {
 			return (time.Duration(seconds) * time.Second).Round(time.Minute).String()
+		},
+		"rate": func(value float64) string {
+			units := []string{"B/s", "KiB/s", "MiB/s", "GiB/s"}
+			unit := 0
+			for value >= 1024 && unit < len(units)-1 {
+				value /= 1024
+				unit++
+			}
+			return fmt.Sprintf("%.1f %s", value, units[unit])
 		},
 		"online": func(value time.Time) string {
 			if time.Since(value) <= 120*time.Second {

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/monitorozo/internal/config"
-	"github.com/example/monitorozo/internal/model"
-	"github.com/example/monitorozo/migrations"
+	"github.com/broist/check_agent/internal/config"
+	"github.com/broist/check_agent/internal/model"
+	"github.com/broist/check_agent/migrations"
 	_ "modernc.org/sqlite"
 )
 

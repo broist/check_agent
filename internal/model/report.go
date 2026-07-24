@@ -10,6 +10,8 @@ import (
 
 const (
 	MaxFilesystems = 128
+	MaxDiskDevices = 128
+	MaxInterfaces  = 128
 	MaxAgentIDLen  = 128
 )
 
@@ -25,6 +27,8 @@ type Report struct {
 	Load15      float64      `json:"load_15"`
 	Memory      Memory       `json:"memory"`
 	Filesystems []Filesystem `json:"filesystems"`
+	DiskIO      []DiskIO     `json:"disk_io"`
+	Networks    []NetworkIO  `json:"networks"`
 	Uptime      uint64       `json:"uptime_seconds"`
 	BootTime    time.Time    `json:"boot_time"`
 	Kernel      string       `json:"kernel"`
@@ -48,6 +52,30 @@ type Filesystem struct {
 	UsedBytes   uint64  `json:"used_bytes"`
 	AvailBytes  uint64  `json:"available_bytes"`
 	UsedPercent float64 `json:"used_percent"`
+}
+
+type DiskIO struct {
+	Device              string  `json:"device"`
+	ReadBytes           uint64  `json:"read_bytes"`
+	WriteBytes          uint64  `json:"write_bytes"`
+	ReadOperations      uint64  `json:"read_operations"`
+	WriteOperations     uint64  `json:"write_operations"`
+	ReadBytesPerSecond  float64 `json:"read_bytes_per_second"`
+	WriteBytesPerSecond float64 `json:"write_bytes_per_second"`
+	ReadOpsPerSecond    float64 `json:"read_ops_per_second"`
+	WriteOpsPerSecond   float64 `json:"write_ops_per_second"`
+}
+
+type NetworkIO struct {
+	Interface          string  `json:"interface"`
+	ReceiveBytes       uint64  `json:"receive_bytes"`
+	TransmitBytes      uint64  `json:"transmit_bytes"`
+	ReceivePackets     uint64  `json:"receive_packets"`
+	TransmitPackets    uint64  `json:"transmit_packets"`
+	ReceiveBytesRate   float64 `json:"receive_bytes_per_second"`
+	TransmitBytesRate  float64 `json:"transmit_bytes_per_second"`
+	ReceivePacketRate  float64 `json:"receive_packets_per_second"`
+	TransmitPacketRate float64 `json:"transmit_packets_per_second"`
 }
 
 func (r Report) Validate(now time.Time, maxSkew time.Duration) error {
@@ -84,7 +112,31 @@ func (r Report) Validate(now time.Time, maxSkew time.Duration) error {
 			return errors.New("filesystem percentage must be between 0 and 100")
 		}
 	}
+	if len(r.DiskIO) > MaxDiskDevices {
+		return fmt.Errorf("too many disk devices: maximum is %d", MaxDiskDevices)
+	}
+	for _, disk := range r.DiskIO {
+		if disk.Device == "" || len(disk.Device) > 128 ||
+			!validRate(disk.ReadBytesPerSecond) || !validRate(disk.WriteBytesPerSecond) ||
+			!validRate(disk.ReadOpsPerSecond) || !validRate(disk.WriteOpsPerSecond) {
+			return errors.New("invalid disk I/O data")
+		}
+	}
+	if len(r.Networks) > MaxInterfaces {
+		return fmt.Errorf("too many network interfaces: maximum is %d", MaxInterfaces)
+	}
+	for _, network := range r.Networks {
+		if network.Interface == "" || len(network.Interface) > 128 ||
+			!validRate(network.ReceiveBytesRate) || !validRate(network.TransmitBytesRate) ||
+			!validRate(network.ReceivePacketRate) || !validRate(network.TransmitPacketRate) {
+			return errors.New("invalid network I/O data")
+		}
+	}
 	return nil
+}
+
+func validRate(value float64) bool {
+	return value >= 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func safeLabel(value string) bool {
