@@ -52,7 +52,7 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 		},
 		AdminPasswordHash: string(passwordHash), SessionSecret: "0123456789abcdef0123456789abcdef",
 		SessionIdleTimeout: time.Minute, SessionMaxLifetime: time.Hour,
-		MaxClockSkew: 2 * time.Minute, CPUAlertThreshold: 80,
+		MaxClockSkew: 2 * time.Minute, MaxReportAge: 24 * time.Hour, CPUAlertThreshold: 80,
 		MemoryAlertThreshold: 90, DiskWarningThreshold: 85,
 		DiskCriticalThreshold: 95, AgentOfflineAfter: 2 * time.Minute,
 		RawRetention: 7 * 24 * time.Hour,
@@ -148,5 +148,69 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 	alerts, err = store.ActiveAlerts(context.Background())
 	if err != nil || alerts[0].AcknowledgedAt == nil || alerts[0].AcknowledgedBy != "admin" {
 		t.Fatalf("alert was not acknowledged: %+v, err=%v", alerts, err)
+	}
+}
+
+func TestBufferedReportIsStoredWithoutStaleAlertEvaluation(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	tokenHash, err := auth.HashToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("test-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Server{
+		AgentTokens:        []config.AgentToken{{AgentID: "buffered-01", Hash: tokenHash}},
+		AdminPasswordHash:  string(passwordHash),
+		SessionSecret:      "0123456789abcdef0123456789abcdef",
+		SessionIdleTimeout: time.Minute, SessionMaxLifetime: time.Hour,
+		MaxClockSkew: 2 * time.Minute, MaxReportAge: 24 * time.Hour,
+		CPUAlertThreshold: 80, MemoryAlertThreshold: 90,
+		DiskWarningThreshold: 85, DiskCriticalThreshold: 95,
+		AgentOfflineAfter: 2 * time.Minute, RawRetention: 7 * 24 * time.Hour,
+	}
+	store, err := storage.Open(filepath.Join(t.TempDir(), "buffered.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.SyncAgents(context.Background(), cfg.AgentTokens); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(cfg, store, &recordingMailer{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(report model.Report) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(report)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/reports", bytes.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		return response
+	}
+	report := model.Report{
+		AgentID: "buffered-01", Timestamp: time.Now().UTC().Add(-10 * time.Minute),
+		Sequence: 1, CPUPercent: 99, Memory: model.Memory{UsedPercent: 20},
+	}
+	if response := send(report); response.Code != http.StatusAccepted {
+		t.Fatalf("buffered ingest returned %d: %s", response.Code, response.Body.String())
+	}
+	alerts, err := store.ActiveAlerts(context.Background())
+	if err != nil || len(alerts) != 0 {
+		t.Fatalf("stale report created current alert: %+v, err=%v", alerts, err)
+	}
+	reports, err := store.LatestReports(context.Background())
+	if err != nil || len(reports) != 1 || reports[0].Sequence != 1 {
+		t.Fatalf("buffered report not stored: %+v, err=%v", reports, err)
+	}
+	report.Sequence = 2
+	report.Timestamp = time.Now().UTC().Add(-25 * time.Hour)
+	if response := send(report); response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expired report returned %d, want 422", response.Code)
 	}
 }

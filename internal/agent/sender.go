@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -27,20 +26,47 @@ func NewSender(url, token string, timeout time.Duration) *Sender {
 	}
 }
 
-func (s *Sender) Run(ctx context.Context, queue <-chan model.Report, onError func(error)) {
+func (s *Sender) Run(ctx context.Context, spool *Spool, onError func(error)) {
+	if onError == nil {
+		onError = func(error) {}
+	}
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case report := <-queue:
-			if err := s.sendWithRetry(ctx, report); err != nil && !errors.Is(err, context.Canceled) {
-				onError(err)
+		report, available, err := spool.Peek()
+		if err != nil {
+			onError(err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
 			}
+			continue
+		}
+		if !available {
+			select {
+			case <-ctx.Done():
+				return
+			case <-spool.Wake():
+			}
+			continue
+		}
+		err = s.sendWithRetry(ctx, report, onError)
+		if err != nil && ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			onError(err)
+		}
+		if removeErr := spool.Acknowledge(report.Sequence); removeErr != nil {
+			onError(removeErr)
 		}
 	}
 }
 
-func (s *Sender) sendWithRetry(ctx context.Context, report model.Report) error {
+func (s *Sender) sendWithRetry(
+	ctx context.Context,
+	report model.Report,
+	onRetry func(error),
+) error {
 	delay := time.Second
 	for {
 		retry, err := s.send(ctx, report)
@@ -50,6 +76,7 @@ func (s *Sender) sendWithRetry(ctx context.Context, report model.Report) error {
 		if !retry {
 			return err
 		}
+		onRetry(fmt.Errorf("delivery attempt failed; retrying: %w", err))
 		jitter := time.Duration(rand.IntN(500)) * time.Millisecond
 		select {
 		case <-ctx.Done():
@@ -85,6 +112,12 @@ func (s *Sender) send(ctx context.Context, report model.Report) (bool, error) {
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		return false, nil
 	}
-	retry := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500
+	retry := response.StatusCode == http.StatusUnauthorized ||
+		response.StatusCode == http.StatusForbidden ||
+		response.StatusCode == http.StatusNotFound ||
+		response.StatusCode == http.StatusRequestTimeout ||
+		response.StatusCode == http.StatusTooEarly ||
+		response.StatusCode == http.StatusTooManyRequests ||
+		response.StatusCode >= 500
 	return retry, fmt.Errorf("server returned status %d", response.StatusCode)
 }

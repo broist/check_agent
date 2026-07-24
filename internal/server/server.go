@@ -318,7 +318,8 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid report", http.StatusBadRequest)
 		return
 	}
-	if err := report.Validate(time.Now().UTC(), s.cfg.MaxClockSkew); err != nil {
+	receivedAt := time.Now().UTC()
+	if err := report.Validate(receivedAt, s.cfg.MaxClockSkew, s.cfg.MaxReportAge); err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
@@ -339,8 +340,12 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if err := s.alerts.EvaluateReport(ctx, report, time.Now()); err != nil {
-		s.logger.Error("alert evaluation failed", "error", err, "agent_id", report.AgentID)
+	if !report.Timestamp.Before(receivedAt.Add(-s.cfg.AgentOfflineAfter)) {
+		if err := s.alerts.EvaluateReport(ctx, report, receivedAt); err != nil {
+			s.logger.Error("alert evaluation failed", "error", err, "agent_id", report.AgentID)
+		}
+	} else if err := s.alerts.ResolveOnline(ctx, report.AgentID, receivedAt); err != nil {
+		s.logger.Error("online recovery evaluation failed", "error", err, "agent_id", report.AgentID)
 	}
 	select {
 	case s.notifyWake <- struct{}{}:

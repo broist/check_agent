@@ -56,11 +56,14 @@ dials. URL userinfo is rejected and query strings are removed from telemetry
 and error messages. A missing Docker socket is reported as an unavailable
 integration rather than failing base metric collection.
 
-Reports are placed in a fixed-capacity in-memory FIFO. The sender retries with
-capped exponential backoff and jitter. When the queue is full, the oldest
-report is discarded and an error is logged without secrets. Sequence numbers
-are persisted atomically so a restart does not make valid traffic look like a
-replay.
+Reports are atomically committed as mode-0600 JSON files to a fixed-capacity
+on-disk FIFO before delivery. Files and the containing directory are synced on
+Linux; successful or permanently invalid reports are removed only after a
+server response. The sender drains files in sequence order with capped
+exponential backoff and jitter. When the spool is full, the oldest report is
+discarded and a structured warning is logged without secrets. Incomplete
+temporary files are cleaned at startup. Sequence numbers are persisted
+atomically so a restart does not make valid traffic look like a replay.
 
 ### Server
 
@@ -69,6 +72,13 @@ HTTP routing. The ingestion endpoint accepts a bounded JSON body, authenticates
 an agent token against an Argon2id-derived hash, checks timestamp skew and a
 strictly increasing sequence number in the same transaction as insertion, then
 evaluates the report.
+
+Buffered measurements may be accepted up to `max_report_age` (24 hours by
+default), while future timestamps remain limited by `max_clock_skew`.
+Transactional sequence checks remain authoritative replay protection. Stale
+backfill is stored for history but does not evaluate current-state rules;
+receiving it still resolves an agent-offline alert because the connection is
+active.
 
 SQLite uses WAL, foreign keys, a busy timeout, prepared statements through
 `database/sql`, one writer connection and indexed time-series tables.
@@ -124,7 +134,8 @@ See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for abuse cases and controls.
 
 ## Availability and recovery
 
-The agent keeps a bounded queue during short network outages. The server
+The agent keeps a bounded durable spool during network outages and across
+restarts. The server
 returns explicit status codes so permanent errors are not retried forever.
 SQLite backup uses its online backup command while WAL is enabled. Service
 deployment keeps the previous binary to permit rollback.
@@ -136,4 +147,4 @@ deployment keeps the previous binary to permit rollback.
   `systemctl show` subprocesses for configured units.
 - Default collection period: 10 seconds (hard minimum: 5 seconds).
 - Bounded report body: 256 KiB.
-- Bounded queue, request deadlines and capped database connections.
+- Bounded disk spool, request deadlines and capped database connections.

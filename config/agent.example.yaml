@@ -7,6 +7,7 @@ interval: 10s
 request_timeout: 5s
 queue_size: 60
 state_file: /var/lib/monitorozo-agent/sequence
+spool_directory: /var/lib/monitorozo-agent/spool
 insecure_dev_http: false
 
 # Optional checks. Omit any section you do not need.

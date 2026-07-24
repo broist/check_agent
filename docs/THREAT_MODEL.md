@@ -14,7 +14,8 @@
 |---|---|---|---|
 | Token theft in transit | forged telemetry | HTTPS required in production; Nginx TLS | endpoint host compromise |
 | Database disclosure | token reuse | Argon2id encoded hashes only | offline guessing of weak tokens; require 32 random bytes |
-| Replay/duplicate report | false history/alerts | timestamp skew and monotonic sequence in one transaction | sequence state recovery must preserve agent state |
+| Replay/duplicate report | false history/alerts | bounded report age/future skew and monotonic sequence in one transaction | sequence state and spool recovery must preserve agent state |
+| Local spool disclosure/tampering | telemetry disclosure or blocked delivery | dedicated state directory, mode-0600 files, strict filenames, bounded file size and atomic sync/rename | host root can read or modify telemetry |
 | Oversized/malformed input | memory/CPU exhaustion | 256 KiB body cap, strict JSON, field/count/range validation | distributed volumetric DoS belongs at proxy/firewall |
 | Brute-force admin login | dashboard compromise | bcrypt, per-IP limiter, generic errors | use external SSO in a later release |
 | Session theft/fixation | admin compromise | random server-side sessions, rotation at login, Secure/HttpOnly/SameSite cookie, expiry | TLS endpoint and browser remain trusted |

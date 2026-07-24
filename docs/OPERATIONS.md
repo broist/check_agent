@@ -44,6 +44,13 @@ sudo chmod 0640 /etc/monitorozo/agent.env /etc/monitorozo/server.env
 EnvironmentFile values do not support arbitrary shell escaping. Generate
 URL-safe secrets and avoid spaces or quotes.
 
+`queue_size` is the maximum number of durable report files, not an unbounded
+memory queue. At the 10-second default, `60` retains roughly ten minutes.
+`spool_directory` defaults to `/var/lib/monitorozo-agent/spool`; it must remain
+inside the agent's writable state directory. The server accepts ordered
+backfill for up to `max_report_age: 24h`. Increase these together only after
+checking disk capacity and the 256 KiB per-report cap.
+
 ## AWS security group
 
 Inbound rules for the monitoring server:

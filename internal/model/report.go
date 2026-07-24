@@ -131,7 +131,7 @@ type TCPStatus struct {
 	Error      string  `json:"error,omitempty"`
 }
 
-func (r Report) Validate(now time.Time, maxSkew time.Duration) error {
+func (r Report) Validate(now time.Time, maxFutureSkew, maxAge time.Duration) error {
 	if r.AgentID == "" || len(r.AgentID) > MaxAgentIDLen {
 		return errors.New("agent_id is missing or too long")
 	}
@@ -144,8 +144,9 @@ func (r Report) Validate(now time.Time, maxSkew time.Duration) error {
 	if r.Sequence > math.MaxInt64 {
 		return errors.New("sequence is too large")
 	}
-	if r.Timestamp.IsZero() || r.Timestamp.Before(now.Add(-maxSkew)) || r.Timestamp.After(now.Add(maxSkew)) {
-		return errors.New("timestamp is outside the accepted clock skew")
+	if r.Timestamp.IsZero() || r.Timestamp.Before(now.Add(-maxAge)) ||
+		r.Timestamp.After(now.Add(maxFutureSkew)) {
+		return errors.New("timestamp is outside the accepted report age or clock skew")
 	}
 	if r.CPUPercent < 0 || r.CPUPercent > 100 {
 		return errors.New("cpu_percent must be between 0 and 100")

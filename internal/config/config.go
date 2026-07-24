@@ -22,6 +22,7 @@ type Agent struct {
 	RequestTimeout  time.Duration `yaml:"request_timeout"`
 	QueueSize       int           `yaml:"queue_size"`
 	StateFile       string        `yaml:"state_file"`
+	SpoolDirectory  string        `yaml:"spool_directory"`
 	IncludeFSTypes  []string      `yaml:"include_fs_types"`
 	InsecureDevHTTP bool          `yaml:"insecure_dev_http"`
 	SystemdServices []string      `yaml:"systemd_services"`
@@ -59,6 +60,7 @@ type Server struct {
 	SessionMaxLifetime    time.Duration `yaml:"session_max_lifetime"`
 	SecureCookies         bool          `yaml:"secure_cookies"`
 	MaxClockSkew          time.Duration `yaml:"max_clock_skew"`
+	MaxReportAge          time.Duration `yaml:"max_report_age"`
 	CPUAlertThreshold     float64       `yaml:"cpu_alert_threshold"`
 	MemoryAlertThreshold  float64       `yaml:"memory_alert_threshold"`
 	HighUsageDuration     time.Duration `yaml:"high_usage_duration"`
@@ -93,6 +95,7 @@ func LoadAgent(path string) (Agent, error) {
 		RequestTimeout: 5 * time.Second,
 		QueueSize:      60,
 		StateFile:      "/var/lib/monitorozo-agent/sequence",
+		SpoolDirectory: "/var/lib/monitorozo-agent/spool",
 		Docker: DockerChecks{
 			Socket:  "/var/run/docker.sock",
 			Timeout: 3 * time.Second,
@@ -131,6 +134,9 @@ func LoadAgent(path string) (Agent, error) {
 	}
 	if cfg.QueueSize < 1 || cfg.QueueSize > 10000 {
 		return cfg, errors.New("queue_size must be between 1 and 10000")
+	}
+	if !pathpkg.IsAbs(cfg.StateFile) || !pathpkg.IsAbs(cfg.SpoolDirectory) {
+		return cfg, errors.New("state_file and spool_directory must be absolute paths")
 	}
 	if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > time.Minute {
 		return cfg, errors.New("request_timeout must be between 1ns and 1m")
@@ -213,6 +219,7 @@ func LoadServer(path string) (Server, error) {
 		SessionMaxLifetime:    12 * time.Hour,
 		SecureCookies:         true,
 		MaxClockSkew:          2 * time.Minute,
+		MaxReportAge:          24 * time.Hour,
 		CPUAlertThreshold:     90,
 		MemoryAlertThreshold:  90,
 		HighUsageDuration:     5 * time.Minute,
@@ -261,6 +268,12 @@ func LoadServer(path string) (Server, error) {
 	}
 	if cfg.AlertCooldown < 0 {
 		return cfg, errors.New("alert_cooldown must not be negative")
+	}
+	if cfg.MaxClockSkew <= 0 || cfg.MaxClockSkew > time.Hour {
+		return cfg, errors.New("max_clock_skew must be between 1ns and 1h")
+	}
+	if cfg.MaxReportAge < cfg.MaxClockSkew || cfg.MaxReportAge > 7*24*time.Hour {
+		return cfg, errors.New("max_report_age must be between max_clock_skew and 168h")
 	}
 	if cfg.RawRetention < 24*time.Hour {
 		return cfg, errors.New("raw_retention must be at least 24h")

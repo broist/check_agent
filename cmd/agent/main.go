@@ -13,7 +13,6 @@ import (
 	"github.com/broist/check_agent/internal/checks"
 	"github.com/broist/check_agent/internal/collector"
 	"github.com/broist/check_agent/internal/config"
-	"github.com/broist/check_agent/internal/model"
 )
 
 func main() {
@@ -38,9 +37,13 @@ func main() {
 	runtimeChecks := checks.New(cfg)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	queue := make(chan model.Report, cfg.QueueSize)
+	spool, err := agent.NewSpool(cfg.SpoolDirectory, cfg.QueueSize)
+	if err != nil {
+		logger.Error("spool initialization failed", "error", err)
+		os.Exit(1)
+	}
 	sender := agent.NewSender(cfg.ServerURL, cfg.Token, cfg.RequestTimeout)
-	go sender.Run(ctx, queue, func(err error) { logger.Error("delivery failed", "error", err) })
+	go sender.Run(ctx, spool, func(err error) { logger.Error("delivery failed", "error", err) })
 
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
@@ -59,15 +62,13 @@ func main() {
 			logger.Error("sequence update failed", "error", err)
 			return
 		}
-		select {
-		case queue <- report:
-		default:
-			select {
-			case <-queue:
-			default:
-			}
-			queue <- report
-			logger.Warn("report queue full; oldest report dropped")
+		dropped, err := spool.Enqueue(report)
+		if err != nil {
+			logger.Error("report buffering failed", "error", err)
+			return
+		}
+		if dropped > 0 {
+			logger.Warn("report spool full; oldest reports dropped", "count", dropped)
 		}
 	}
 	collect()

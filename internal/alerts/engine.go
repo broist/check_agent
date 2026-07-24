@@ -185,6 +185,14 @@ func (e *Engine) EvaluateOffline(ctx context.Context, now time.Time) error {
 	return nil
 }
 
+func (e *Engine) ResolveOnline(ctx context.Context, agentID string, now time.Time) error {
+	_, err := e.store.ApplyRule(ctx, storage.RuleEvaluation{
+		AgentID: agentID, RuleKey: "agent_offline", Severity: "critical",
+		Value: 0, Threshold: e.cfg.AgentOfflineAfter.Seconds(), Violated: false,
+	}, now)
+	return err
+}
+
 func boolValue(value bool) float64 {
 	if value {
 		return 1

@@ -10,6 +10,8 @@ pending/firing/resolved CPU, memory, disk and offline rules, cooldown,
 delivery retry, recovery mail, acknowledgement and history.
 Optional checks cover selected systemd units, Docker containers and health,
 HTTP/HTTPS status and latency, TLS certificate lifetime, and TCP reachability.
+Reports are first committed to a bounded on-disk spool, so short outages and
+agent restarts do not discard pending telemetry.
 
 The exact scope and intentional deferrals are in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Do not expose development HTTP

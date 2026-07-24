@@ -40,12 +40,32 @@ func (s *Sequence) Next() (uint64, error) {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
 		return 0, fmt.Errorf("create state directory: %w", err)
 	}
-	temp := s.path + ".tmp"
-	if err := os.WriteFile(temp, []byte(strconv.FormatUint(next, 10)+"\n"), 0o600); err != nil {
+	temp, err := os.CreateTemp(filepath.Dir(s.path), ".sequence-*")
+	if err != nil {
+		return 0, fmt.Errorf("create sequence state: %w", err)
+	}
+	tempName := temp.Name()
+	defer os.Remove(tempName)
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return 0, fmt.Errorf("protect sequence state: %w", err)
+	}
+	if _, err := temp.WriteString(strconv.FormatUint(next, 10) + "\n"); err != nil {
+		_ = temp.Close()
 		return 0, fmt.Errorf("write sequence: %w", err)
 	}
-	if err := os.Rename(temp, s.path); err != nil {
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return 0, fmt.Errorf("sync sequence: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return 0, fmt.Errorf("close sequence: %w", err)
+	}
+	if err := atomicReplace(tempName, s.path); err != nil {
 		return 0, fmt.Errorf("commit sequence: %w", err)
+	}
+	if err := syncDirectory(filepath.Dir(s.path)); err != nil {
+		return 0, fmt.Errorf("sync sequence directory: %w", err)
 	}
 	s.value = next
 	return next, nil

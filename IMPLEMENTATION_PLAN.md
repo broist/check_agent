@@ -27,10 +27,11 @@
 - Optional systemd, Docker, HTTP/TLS and TCP checks.
 - Service/container, three-consecutive HTTP failure and TLS-expiry rules.
 - Responsive dashboard status lists for all optional integrations.
+- Crash-safe bounded agent spool with ordered retry and restart recovery.
+- Bounded-age backfill that preserves replay protection without firing stale alerts.
 
 ### Deferred to later milestones
 
-- Durable on-disk agent outage buffer.
 - Expanded multi-host administration and token rotation UI.
 - Amazon SES API integration (SES SMTP works in the MVP).
 - Installer/updater/uninstaller automation beyond safe starter scripts.
@@ -47,8 +48,8 @@
 
 ## Next milestones
 
-1. Durable bounded agent spool for outages and crash recovery.
-2. Multi-agent administration, token rotation UI and audit browser.
+1. Multi-agent administration, token rotation UI and audit browser.
+2. Production CI/release and deployment hardening audit.
 
 No deferred critical security behavior is represented as a TODO in executable
 code. Deferred features remain documented product scope.

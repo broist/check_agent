@@ -6,6 +6,7 @@ secure_cookies: true
 session_idle_timeout: 30m
 session_max_lifetime: 12h
 max_clock_skew: 2m
+max_report_age: 24h
 cpu_alert_threshold: 90
 memory_alert_threshold: 90
 high_usage_duration: 5m
