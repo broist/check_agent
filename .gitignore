@@ -1,0 +1,11 @@
+/bin/
+/dist/
+/*.db
+/*.db-shm
+/*.db-wal
+/.env
+/.tools/
+/.cache/
+/.gopath/
+*.local.yaml
+coverage.out

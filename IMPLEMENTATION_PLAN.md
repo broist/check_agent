@@ -1,0 +1,48 @@
+# Implementation plan
+
+## MVP boundary
+
+### Included in the first vertical slice
+
+- Linux CPU, memory, swap, mounted-filesystem and uptime collection.
+- Configurable 5-second-or-longer collection interval.
+- Authenticated HTTP(S) JSON ingestion with timestamp/sequence replay checks.
+- Token rotation through multiple simultaneously valid hashed tokens.
+- Bounded agent queue and exponential retry.
+- SQLite WAL storage and embedded migrations.
+- Latest-report authenticated responsive dashboard.
+- Secure admin login, session and CSRF handling.
+- Configurable CPU threshold, transition audit and SMTP/recovery mail.
+- Health endpoint, systemd units, Docker images/Compose and operator docs.
+- Unit tests and an end-to-end ingestion test.
+
+### Deferred until the MVP gate is green
+
+- SSE/live push and historical charts/aggregation.
+- Raw-data retention worker.
+- Service, Docker, HTTP, TCP and TLS collectors.
+- Multi-host dashboard, alert pending durations/cooldowns and acknowledgement.
+- Amazon SES API integration (SES SMTP works in the MVP).
+- Installer/updater/uninstaller automation beyond safe starter scripts.
+
+## Delivery stages and gates
+
+1. **Architecture gate** — architecture, threat model and MVP boundary reviewed.
+2. **Agent gate** — collectors and payload validation unit-tested; static build.
+3. **Server gate** — migration, ingestion, auth and alert transitions tested.
+4. **End-to-end gate** — a real collected report reaches SQLite and dashboard.
+5. **Deployment gate** — systemd sandboxing, Compose and operator procedures
+   validated.
+6. **Release gate** — `gofmt`, `go vet`, tests and amd64/arm64 builds pass.
+
+## Next milestones
+
+1. Historical query API, hourly aggregates and 7/90-day retention.
+2. SSE dashboard updates and CPU/RAM/network charts.
+3. Pending-duration/cooldown rules and alert acknowledgement.
+4. systemd, Docker, HTTP/TLS and TCP collectors with least-privilege guidance.
+5. Multi-agent administration, token rotation UI and audit browser.
+
+No deferred critical security behavior is represented as a TODO in executable
+code. Deferred features remain documented product scope.
+

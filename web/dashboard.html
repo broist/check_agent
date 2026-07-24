@@ -1,0 +1,28 @@
+{{define "dashboard"}}
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Monitorozo</title><link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script></head>
+<body><header><h1>Monitorozo</h1><form method="post" action="/logout">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}"><button>Sign out</button></form></header>
+<main>
+{{if .Alerts}}<section><h2>Active alerts</h2><div class="grid">
+{{range .Alerts}}<article class="card critical"><h3>{{.AgentID}} · {{.RuleKey}}</h3>
+<strong>{{printf "%.1f" .Value}}%</strong><p>Threshold {{printf "%.1f" .Threshold}}% · since {{time .StartedAt}}</p></article>{{end}}
+</div></section>{{end}}
+<section><h2>Servers</h2>
+{{if not .Reports}}<p class="empty">No reports received yet.</p>{{end}}
+<div class="grid">{{range .Reports}}<article class="card {{status .Timestamp}}">
+<div class="title"><h3>{{.Hostname}}</h3><span>{{online .Timestamp}}</span></div>
+<p class="muted">{{.AgentID}} · last seen {{time .Timestamp}}</p>
+<div class="metrics"><div><span>CPU</span><strong>{{printf "%.1f" .CPUPercent}}%</strong></div>
+<div><span>RAM</span><strong>{{printf "%.1f" .Memory.UsedPercent}}%</strong></div>
+<div><span>Swap</span><strong>{{printf "%.1f" .Memory.SwapPercent}}%</strong></div>
+<div><span>Uptime</span><strong>{{duration .Uptime}}</strong></div></div>
+<h4>Filesystems</h4><div class="filesystems">{{range .Filesystems}}
+<div><span>{{.Mountpoint}}</span><progress max="100" value="{{.UsedPercent}}"></progress>
+<strong>{{printf "%.1f" .UsedPercent}}%</strong></div>{{end}}</div>
+</article>{{end}}</div></section></main></body></html>
+{{end}}
+

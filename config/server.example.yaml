@@ -1,0 +1,32 @@
+# Copy to /etc/monitorozo/server.yaml (0640, root:monitorozo-server).
+listen: 127.0.0.1:8080
+database_path: /var/lib/monitorozo-server/monitorozo.db
+public_url: https://monitor.example.com/
+secure_cookies: true
+session_idle_timeout: 30m
+session_max_lifetime: 12h
+max_clock_skew: 2m
+cpu_alert_threshold: 90
+trusted_proxy: 127.0.0.0/8
+
+# Generate with: monitorozo-server hash-token RANDOM_TOKEN
+agent_tokens:
+  - agent_id: web-01
+    hash: "$argon2id$replace-with-generated-hash"
+  # During rotation, add the new hash for the same agent, restart the server,
+  # switch the agent token, then remove the old hash and restart again.
+  # - agent_id: web-01
+  #   hash: "$argon2id$replace-with-second-generated-hash"
+
+# Prefer MONITOROZO_ADMIN_PASSWORD_HASH and MONITOROZO_SESSION_SECRET.
+admin_password_hash: "$2a$12$replace-with-generated-bcrypt-hash"
+session_secret: replace-with-at-least-32-random-characters
+
+smtp:
+  enabled: false
+  address: email-smtp.eu-central-1.amazonaws.com:587
+  username: ""
+  # Prefer MONITOROZO_SMTP_PASSWORD.
+  password: ""
+  from: alerts@example.com
+  to: operator@example.com
