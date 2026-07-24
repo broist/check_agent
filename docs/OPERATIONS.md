@@ -94,6 +94,14 @@ Put the SES SMTP password in `MONITOROZO_SMTP_PASSWORD`. Port 587 must advertise
 STARTTLS; Monitorozo refuses plaintext SMTP. For another provider, use its
 STARTTLS submission endpoint. Restart the server after configuration changes.
 
+## Retention and capacity
+
+The default `raw_retention: 168h` keeps ten-second reports for seven days.
+Completed hours are aggregated and retained by `aggregate_retention: 2160h`
+for 90 days. Maintenance runs hourly and applies both deletions transactionally.
+Size the volume with headroom and monitor it externally until disk alerts are
+implemented. Changing retention takes effect at the next maintenance run.
+
 ## Start and inspect services
 
 ```bash

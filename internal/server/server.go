@@ -39,6 +39,7 @@ type Server struct {
 	apiLimiter   *auth.Limiter
 	templates    *template.Template
 	trustedProxy *net.IPNet
+	events       *broker
 }
 
 type dashboardData struct {
@@ -77,6 +78,7 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 		loginLimiter: auth.NewLimiter(5, 15*time.Minute),
 		apiLimiter:   auth.NewLimiter(120, time.Minute),
 		templates:    templates,
+		events:       newBroker(),
 	}
 	if cfg.TrustedProxy != "" {
 		_, network, err := net.ParseCIDR(cfg.TrustedProxy)
@@ -95,6 +97,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.requireAuth(s.logout))
 	mux.HandleFunc("POST /api/v1/reports", s.ingest)
+	mux.HandleFunc("GET /api/v1/history", s.requireAuth(s.history))
+	mux.HandleFunc("GET /api/v1/events", s.requireAuth(s.eventStream))
 	mux.Handle("GET /static/", http.FileServer(http.FS(web.Files)))
 	mux.HandleFunc("GET /", s.requireAuth(s.dashboard))
 	return s.securityHeaders(mux)
@@ -173,6 +177,73 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "dashboard", dashboardData{CSRF: session.CSRF, Reports: reports, Alerts: alerts})
 }
 
+func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	agentID := r.URL.Query().Get("agent_id")
+	if !validAgentID(agentID) {
+		http.Error(w, "invalid agent_id", http.StatusBadRequest)
+		return
+	}
+	rangeName := r.URL.Query().Get("range")
+	if rangeName == "" {
+		rangeName = "24h"
+	}
+	historyRange, ok := historyRanges[rangeName]
+	if !ok {
+		http.Error(w, "invalid range", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := contextWithTimeout(r, 5*time.Second)
+	defer cancel()
+	points, err := s.store.History(ctx, agentID, time.Now().UTC().Add(-historyRange), s.cfg.RawRetention, 720)
+	if err != nil {
+		s.logger.Error("load history failed", "error", err, "agent_id", agentID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(struct {
+		AgentID string                 `json:"agent_id"`
+		Range   string                 `json:"range"`
+		Points  []storage.HistoryPoint `json:"points"`
+	}{AgentID: agentID, Range: rangeName, Points: points}); err != nil {
+		s.logger.Error("encode history failed", "error", err)
+	}
+}
+
+func (s *Server) eventStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-store")
+	w.Header().Set("X-Accel-Buffering", "no")
+	channel, unsubscribe := s.events.subscribe()
+	defer unsubscribe()
+	_, _ = io.WriteString(w, ": connected\n\n")
+	flusher.Flush()
+	keepAlive := time.NewTicker(15 * time.Second)
+	defer keepAlive.Stop()
+	revalidate := time.NewTimer(5 * time.Minute)
+	defer revalidate.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-revalidate.C:
+			return
+		case message := <-channel:
+			_, _ = fmt.Fprintf(w, "event: report\ndata: %s\n\n", message)
+			flusher.Flush()
+		case <-keepAlive.C:
+			_, _ = io.WriteString(w, ": keepalive\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 	if !s.apiLimiter.Allow(s.clientIP(r)) {
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
@@ -222,6 +293,11 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 			s.logger.Error("mark alert notification failed", "error", err, "alert_id", alert.ID)
 		}
 	}
+	event, _ := json.Marshal(struct {
+		AgentID   string    `json:"agent_id"`
+		Timestamp time.Time `json:"timestamp"`
+	}{AgentID: report.AgentID, Timestamp: report.Timestamp})
+	s.events.publish(string(event))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = io.WriteString(w, `{"status":"accepted"}`)
@@ -297,6 +373,29 @@ func verifyAnyToken(token string, hashes []string) bool {
 		}
 	}
 	return valid
+}
+
+var historyRanges = map[string]time.Duration{
+	"1h":  time.Hour,
+	"24h": 24 * time.Hour,
+	"7d":  7 * 24 * time.Hour,
+	"30d": 30 * 24 * time.Hour,
+	"90d": 90 * 24 * time.Hour,
+}
+
+func validAgentID(value string) bool {
+	if value == "" || len(value) > model.MaxAgentIDLen {
+		return false
+	}
+	for _, character := range value {
+		if !(character == '-' || character == '_' || character == '.' ||
+			character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func contextWithTimeout(r *http.Request, duration time.Duration) (context.Context, context.CancelFunc) {

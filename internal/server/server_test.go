@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -51,6 +52,7 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 		AdminPasswordHash: string(passwordHash), SessionSecret: "0123456789abcdef0123456789abcdef",
 		SessionIdleTimeout: time.Minute, SessionMaxLifetime: time.Hour,
 		MaxClockSkew: 2 * time.Minute, CPUAlertThreshold: 80,
+		RawRetention: 7 * 24 * time.Hour,
 	}
 	store, err := storage.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -91,5 +93,22 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 	}
 	if response := send(rotatedToken); response.Code != http.StatusConflict {
 		t.Fatalf("replay returned %d, want 409", response.Code)
+	}
+	form := url.Values{"password": {"a-long-test-password"}}
+	loginRequest := httptest.NewRequest(http.MethodPost, "/login", bytes.NewBufferString(form.Encode()))
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(loginResponse, loginRequest)
+	if loginResponse.Code != http.StatusSeeOther {
+		t.Fatalf("login returned %d", loginResponse.Code)
+	}
+	historyRequest := httptest.NewRequest(http.MethodGet, "/api/v1/history?agent_id=test-01&range=24h", nil)
+	for _, cookie := range loginResponse.Result().Cookies() {
+		historyRequest.AddCookie(cookie)
+	}
+	historyResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(historyResponse, historyRequest)
+	if historyResponse.Code != http.StatusOK {
+		t.Fatalf("history returned %d: %s", historyResponse.Code, historyResponse.Body.String())
 	}
 }

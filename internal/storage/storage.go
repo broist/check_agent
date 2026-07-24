@@ -36,6 +36,13 @@ type Alert struct {
 	ResolvedAt *time.Time
 }
 
+type HistoryPoint struct {
+	Timestamp     time.Time `json:"timestamp"`
+	CPUPercent    float64   `json:"cpu_percent"`
+	MemoryPercent float64   `json:"memory_percent"`
+	Samples       int64     `json:"samples"`
+}
+
 func Open(path string) (*Store, error) {
 	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 	db, err := sql.Open("sqlite", dsn)
@@ -167,6 +174,10 @@ func (s *Store) TokenHashes(ctx context.Context, agentID string) ([]string, erro
 }
 
 func (s *Store) SaveReport(ctx context.Context, report model.Report) error {
+	report.Timestamp = report.Timestamp.UTC()
+	if !report.BootTime.IsZero() {
+		report.BootTime = report.BootTime.UTC()
+	}
 	payload, err := json.Marshal(report)
 	if err != nil {
 		return err
@@ -222,6 +233,142 @@ func (s *Store) LatestReports(ctx context.Context) ([]model.Report, error) {
 		reports = append(reports, report)
 	}
 	return reports, rows.Err()
+}
+
+func (s *Store) History(ctx context.Context, agentID string, since time.Time, rawRetention time.Duration, maxPoints int) ([]HistoryPoint, error) {
+	if maxPoints < 1 {
+		return nil, errors.New("maxPoints must be positive")
+	}
+	rawStart := time.Now().UTC().Add(-rawRetention)
+	var points []HistoryPoint
+	if since.Before(rawStart) {
+		hourly, err := s.hourlyHistory(ctx, agentID, since, rawStart)
+		if err != nil {
+			return nil, err
+		}
+		points = append(points, hourly...)
+		since = rawStart
+	}
+	raw, err := s.rawHistory(ctx, agentID, since)
+	if err != nil {
+		return nil, err
+	}
+	points = append(points, raw...)
+	return downsample(points, maxPoints), nil
+}
+
+func (s *Store) rawHistory(ctx context.Context, agentID string, since time.Time) ([]HistoryPoint, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT measured_at, cpu_percent, memory_percent
+		FROM reports WHERE agent_id=? AND measured_at>=? ORDER BY measured_at`,
+		agentID, since.Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var points []HistoryPoint
+	for rows.Next() {
+		var timestamp string
+		var point HistoryPoint
+		if err := rows.Scan(&timestamp, &point.CPUPercent, &point.MemoryPercent); err != nil {
+			return nil, err
+		}
+		point.Timestamp, _ = time.Parse(time.RFC3339Nano, timestamp)
+		point.Samples = 1
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}
+
+func (s *Store) hourlyHistory(ctx context.Context, agentID string, since, until time.Time) ([]HistoryPoint, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT hour_start, cpu_avg, memory_avg, samples
+		FROM hourly_metrics WHERE agent_id=? AND hour_start>=? AND hour_start<?
+		ORDER BY hour_start`, agentID, since.Format(time.RFC3339), until.Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var points []HistoryPoint
+	for rows.Next() {
+		var timestamp string
+		var point HistoryPoint
+		if err := rows.Scan(&timestamp, &point.CPUPercent, &point.MemoryPercent, &point.Samples); err != nil {
+			return nil, err
+		}
+		point.Timestamp, _ = time.Parse(time.RFC3339, timestamp)
+		points = append(points, point)
+	}
+	return points, rows.Err()
+}
+
+func downsample(points []HistoryPoint, maximum int) []HistoryPoint {
+	if len(points) <= maximum {
+		return points
+	}
+	result := make([]HistoryPoint, 0, maximum)
+	bucketSize := float64(len(points)) / float64(maximum)
+	for bucket := 0; bucket < maximum; bucket++ {
+		start := int(float64(bucket) * bucketSize)
+		end := int(float64(bucket+1) * bucketSize)
+		if end <= start {
+			end = start + 1
+		}
+		if end > len(points) {
+			end = len(points)
+		}
+		var cpu, memory float64
+		var samples int64
+		for _, point := range points[start:end] {
+			weight := point.Samples
+			if weight < 1 {
+				weight = 1
+			}
+			cpu += point.CPUPercent * float64(weight)
+			memory += point.MemoryPercent * float64(weight)
+			samples += weight
+		}
+		result = append(result, HistoryPoint{
+			Timestamp: points[start].Timestamp, CPUPercent: cpu / float64(samples),
+			MemoryPercent: memory / float64(samples), Samples: samples,
+		})
+	}
+	return result
+}
+
+func (s *Store) Maintain(ctx context.Context, now time.Time, rawRetention, aggregateRetention time.Duration) error {
+	now = now.UTC()
+	currentHour := now.Truncate(time.Hour)
+	rawCutoff := now.Add(-rawRetention)
+	aggregateCutoff := now.Add(-aggregateRetention)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO hourly_metrics(
+		agent_id, hour_start, cpu_avg, cpu_min, cpu_max, memory_avg, memory_min,
+		memory_max, samples)
+		SELECT agent_id, strftime('%Y-%m-%dT%H:00:00Z', measured_at),
+		AVG(cpu_percent), MIN(cpu_percent), MAX(cpu_percent), AVG(memory_percent),
+		MIN(memory_percent), MAX(memory_percent), COUNT(*)
+		FROM reports WHERE measured_at < ?
+		GROUP BY agent_id, strftime('%Y-%m-%dT%H:00:00Z', measured_at)
+		ON CONFLICT(agent_id, hour_start) DO UPDATE SET
+		cpu_avg=excluded.cpu_avg, cpu_min=excluded.cpu_min, cpu_max=excluded.cpu_max,
+		memory_avg=excluded.memory_avg, memory_min=excluded.memory_min,
+		memory_max=excluded.memory_max, samples=excluded.samples`,
+		currentHour.Format(time.RFC3339))
+	if err != nil {
+		return fmt.Errorf("aggregate metrics: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM reports WHERE measured_at < ?",
+		rawCutoff.Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("delete raw metrics: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM hourly_metrics WHERE hour_start < ?",
+		aggregateCutoff.Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("delete hourly metrics: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ActiveAlerts(ctx context.Context) ([]Alert, error) {

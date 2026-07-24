@@ -16,10 +16,14 @@
 - Health endpoint, systemd units, Docker images/Compose and operator docs.
 - Unit tests and an end-to-end ingestion test.
 
-### Deferred until the MVP gate is green
+### Delivered immediately after the MVP gate
 
-- SSE/live push and historical charts/aggregation.
-- Raw-data retention worker.
+- Authenticated SSE report notifications.
+- CPU/RAM history API and dependency-free canvas charts.
+- Seven-day raw retention and 90-day hourly aggregates.
+
+### Deferred to later milestones
+
 - Service, Docker, HTTP, TCP and TLS collectors.
 - Multi-host dashboard, alert pending durations/cooldowns and acknowledgement.
 - Amazon SES API integration (SES SMTP works in the MVP).
@@ -37,12 +41,10 @@
 
 ## Next milestones
 
-1. Historical query API, hourly aggregates and 7/90-day retention.
-2. SSE dashboard updates and CPU/RAM/network charts.
-3. Pending-duration/cooldown rules and alert acknowledgement.
-4. systemd, Docker, HTTP/TLS and TCP collectors with least-privilege guidance.
-5. Multi-agent administration, token rotation UI and audit browser.
+1. Network and disk-I/O metrics.
+2. Pending-duration/cooldown rules and alert acknowledgement.
+3. systemd, Docker, HTTP/TLS and TCP collectors with least-privilege guidance.
+4. Multi-agent administration, token rotation UI and audit browser.
 
 No deferred critical security behavior is represented as a TODO in executable
 code. Deferred features remain documented product scope.
-

@@ -65,6 +65,7 @@ func main() {
 	}
 	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go runMaintenance(stopCtx, store, cfg, logger)
 	go func() {
 		<-stopCtx.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -77,6 +78,28 @@ func main() {
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)
+	}
+}
+
+func runMaintenance(ctx context.Context, store *storage.Store, cfg config.Server, logger *slog.Logger) {
+	run := func() {
+		maintenanceCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		if err := store.Maintain(maintenanceCtx, time.Now(), cfg.RawRetention, cfg.AggregateRetention); err != nil &&
+			ctx.Err() == nil {
+			logger.Error("metric maintenance failed", "error", err)
+		}
+	}
+	run()
+	ticker := time.NewTicker(cfg.MaintenanceInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
 	}
 }
 

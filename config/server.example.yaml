@@ -8,6 +8,9 @@ session_max_lifetime: 12h
 max_clock_skew: 2m
 cpu_alert_threshold: 90
 trusted_proxy: 127.0.0.0/8
+raw_retention: 168h
+aggregate_retention: 2160h
+maintenance_interval: 1h
 
 # Generate with: monitorozo-server hash-token RANDOM_TOKEN
 agent_tokens:

@@ -3,7 +3,8 @@
 Monitorozo is a small, self-hosted Linux monitoring system written in Go. This
 repository currently contains the first end-to-end MVP: a lightweight agent,
 authenticated ingestion server, SQLite persistence, secure dashboard and a CPU
-threshold SMTP alert.
+threshold SMTP alert. It also includes authenticated live updates, CPU/RAM
+history charts, seven-day raw retention and 90-day hourly aggregates.
 
 The exact scope and intentional deferrals are in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Do not expose development HTTP
@@ -94,4 +95,3 @@ timestamp/sequence replay protection. The dashboard uses opaque server-side
 sessions, Secure/HttpOnly/SameSite cookies, CSRF checks and a restrictive CSP.
 
 Read [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) before exposing the service.
-

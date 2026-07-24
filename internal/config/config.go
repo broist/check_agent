@@ -24,19 +24,22 @@ type Agent struct {
 }
 
 type Server struct {
-	Listen             string        `yaml:"listen"`
-	DatabasePath       string        `yaml:"database_path"`
-	PublicURL          string        `yaml:"public_url"`
-	AgentTokens        []AgentToken  `yaml:"agent_tokens"`
-	AdminPasswordHash  string        `yaml:"admin_password_hash"`
-	SessionSecret      string        `yaml:"session_secret"`
-	SessionIdleTimeout time.Duration `yaml:"session_idle_timeout"`
-	SessionMaxLifetime time.Duration `yaml:"session_max_lifetime"`
-	SecureCookies      bool          `yaml:"secure_cookies"`
-	MaxClockSkew       time.Duration `yaml:"max_clock_skew"`
-	CPUAlertThreshold  float64       `yaml:"cpu_alert_threshold"`
-	TrustedProxy       string        `yaml:"trusted_proxy"`
-	SMTP               SMTP          `yaml:"smtp"`
+	Listen              string        `yaml:"listen"`
+	DatabasePath        string        `yaml:"database_path"`
+	PublicURL           string        `yaml:"public_url"`
+	AgentTokens         []AgentToken  `yaml:"agent_tokens"`
+	AdminPasswordHash   string        `yaml:"admin_password_hash"`
+	SessionSecret       string        `yaml:"session_secret"`
+	SessionIdleTimeout  time.Duration `yaml:"session_idle_timeout"`
+	SessionMaxLifetime  time.Duration `yaml:"session_max_lifetime"`
+	SecureCookies       bool          `yaml:"secure_cookies"`
+	MaxClockSkew        time.Duration `yaml:"max_clock_skew"`
+	CPUAlertThreshold   float64       `yaml:"cpu_alert_threshold"`
+	TrustedProxy        string        `yaml:"trusted_proxy"`
+	RawRetention        time.Duration `yaml:"raw_retention"`
+	AggregateRetention  time.Duration `yaml:"aggregate_retention"`
+	MaintenanceInterval time.Duration `yaml:"maintenance_interval"`
+	SMTP                SMTP          `yaml:"smtp"`
 }
 
 type AgentToken struct {
@@ -86,13 +89,16 @@ func LoadAgent(path string) (Agent, error) {
 
 func LoadServer(path string) (Server, error) {
 	cfg := Server{
-		Listen:             "127.0.0.1:8080",
-		DatabasePath:       "/var/lib/monitorozo-server/monitorozo.db",
-		SessionIdleTimeout: 30 * time.Minute,
-		SessionMaxLifetime: 12 * time.Hour,
-		SecureCookies:      true,
-		MaxClockSkew:       2 * time.Minute,
-		CPUAlertThreshold:  90,
+		Listen:              "127.0.0.1:8080",
+		DatabasePath:        "/var/lib/monitorozo-server/monitorozo.db",
+		SessionIdleTimeout:  30 * time.Minute,
+		SessionMaxLifetime:  12 * time.Hour,
+		SecureCookies:       true,
+		MaxClockSkew:        2 * time.Minute,
+		CPUAlertThreshold:   90,
+		RawRetention:        7 * 24 * time.Hour,
+		AggregateRetention:  90 * 24 * time.Hour,
+		MaintenanceInterval: time.Hour,
 	}
 	if err := loadYAML(path, &cfg); err != nil {
 		return cfg, err
@@ -115,6 +121,15 @@ func LoadServer(path string) (Server, error) {
 	}
 	if cfg.CPUAlertThreshold <= 0 || cfg.CPUAlertThreshold > 100 {
 		return cfg, errors.New("cpu_alert_threshold must be between 0 and 100")
+	}
+	if cfg.RawRetention < 24*time.Hour {
+		return cfg, errors.New("raw_retention must be at least 24h")
+	}
+	if cfg.AggregateRetention < cfg.RawRetention {
+		return cfg, errors.New("aggregate_retention must not be shorter than raw_retention")
+	}
+	if cfg.MaintenanceInterval < 5*time.Minute {
+		return cfg, errors.New("maintenance_interval must be at least 5m")
 	}
 	return cfg, nil
 }

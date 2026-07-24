@@ -64,8 +64,15 @@ SQLite uses WAL, foreign keys, a busy timeout, prepared statements through
 `database/sql`, one writer connection and indexed time-series tables.
 Migrations are embedded in the binary and applied transactionally.
 
+Raw reports are retained for seven days by default. A bounded maintenance job
+upserts completed hours into an hourly CPU/RAM aggregate table and retains
+those points for 90 days. Both periods and the maintenance interval are
+configurable. History responses are capped and downsampled in-process.
+
 The dashboard uses embedded Go templates, CSS and vanilla JavaScript. It does
-not display synthetic data. Authentication uses bcrypt, opaque server-side
+not display synthetic data. Canvas charts query authenticated raw/hourly
+history, and an authenticated Server-Sent Events stream signals new reports.
+Authentication uses bcrypt, opaque server-side
 sessions, Secure/HttpOnly/SameSite cookies, CSRF tokens, idle/absolute expiry
 and per-IP login throttling. Security headers are applied globally.
 
@@ -115,4 +122,3 @@ deployment keeps the previous binary to permit rollback.
 - Default collection period: 10 seconds (hard minimum: 5 seconds).
 - Bounded report body: 256 KiB.
 - Bounded queue, request deadlines and capped database connections.
-
