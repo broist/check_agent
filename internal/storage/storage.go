@@ -402,6 +402,12 @@ func (s *Store) ActiveAlerts(ctx context.Context) ([]Alert, error) {
 		WHERE state IN ('pending', 'firing') ORDER BY started_at DESC`)
 }
 
+func (s *Store) UnacknowledgedActiveAlerts(ctx context.Context) ([]Alert, error) {
+	return s.queryAlerts(ctx, `SELECT `+alertColumns+` FROM alerts
+		WHERE state IN ('pending', 'firing') AND acknowledged_at IS NULL
+		ORDER BY started_at DESC`)
+}
+
 func (s *Store) AlertHistory(ctx context.Context, limit int) ([]Alert, error) {
 	if limit < 1 {
 		limit = 1

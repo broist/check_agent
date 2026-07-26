@@ -324,7 +324,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	alerts, err := s.store.ActiveAlerts(ctx)
+	alerts, err := s.store.UnacknowledgedActiveAlerts(ctx)
 	if err != nil {
 		s.logger.Error("load alerts failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

@@ -156,6 +156,10 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 	if err != nil || alerts[0].AcknowledgedAt == nil || alerts[0].AcknowledgedBy != "admin" {
 		t.Fatalf("alert was not acknowledged: %+v, err=%v", alerts, err)
 	}
+	visibleAlerts, err := store.UnacknowledgedActiveAlerts(context.Background())
+	if err != nil || len(visibleAlerts) != 0 {
+		t.Fatalf("acknowledged alert remained visible: %+v, err=%v", visibleAlerts, err)
+	}
 }
 
 func TestBufferedReportIsStoredWithoutStaleAlertEvaluation(t *testing.T) {
