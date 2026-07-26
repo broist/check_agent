@@ -92,6 +92,8 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
 func (s *Store) migrate(ctx context.Context) error {
 	entries, err := fs.Glob(migrations.Files, "*.sql")
 	if err != nil {

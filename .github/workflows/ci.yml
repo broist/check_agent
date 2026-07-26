@@ -2,23 +2,34 @@ name: CI
 on:
   push:
   pull_request:
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.24.x"
+          go-version: "1.26.5"
           cache: true
+      - run: go mod verify
       - run: test -z "$(gofmt -l .)"
+      - run: shellcheck scripts/*.sh
+      - run: docker compose -f deploy/docker/docker-compose.yml config --quiet
       - run: go vet ./...
-      - run: go test -race -cover ./...
-      - run: make release VERSION=ci
-      - uses: actions/upload-artifact@v4
+      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - run: make release VERSION=ci COMMIT="${GITHUB_SHA}" BUILD_TIME="ci"
+      - run: scripts/ci-agent-runtime.sh dist/monitorozo-agent-linux-amd64
+      - run: sha256sum dist/monitorozo-* > dist/SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-binaries
           path: dist/
-
+          if-no-files-found: error
+          retention-days: 14

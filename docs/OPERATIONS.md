@@ -1,12 +1,25 @@
-# Operations runbook (MVP)
+# Production operations runbook
 
 Production traffic must use Nginx TLS; development HTTP must never cross an
 untrusted network. Replace `monitor.example.com` and AWS region values below.
 
-## Ubuntu installation
+## Two-instance topology
 
-On an Ubuntu 24.04 server, build on CI or a trusted build host, copy the two
-matching release binaries and this repository, then run:
+Use separate Ubuntu 24.04 Lightsail instances:
+
+- the **monitoring instance** runs `monitorozo-server`, Nginx, SQLite and SMTP;
+- the **production instance** runs only `monitorozo-agent`.
+
+The agent initiates outbound HTTPS reports to the monitoring instance. The
+monitoring service never needs an inbound connection to the production host.
+
+Build in CI or on a trusted build host and verify `SHA256SUMS` before copying
+the matching release binary and repository files to each instance. For
+Graviton instances, use the `linux-arm64` binary.
+
+## Monitoring-instance installation
+
+On the monitoring instance:
 
 ```bash
 sudo apt-get update
@@ -15,14 +28,12 @@ sudo install -d -m 0755 /opt/monitorozo
 sudo cp -a . /opt/monitorozo/source
 cd /opt/monitorozo/source
 sudo install -d -m 0755 bin
-sudo install -m 0755 dist/monitorozo-agent-linux-amd64 bin/monitorozo-agent
 sudo install -m 0755 dist/monitorozo-server-linux-amd64 bin/monitorozo-server
-sudo ./scripts/install.sh
+sudo ./scripts/install.sh server
 sudo install -o root -g monitorozo-server -m 0640 config/server.example.yaml /etc/monitorozo/server.yaml
-sudo install -o root -g monitorozo-agent -m 0640 config/agent.example.yaml /etc/monitorozo/agent.yaml
 ```
 
-For Graviton instances, use the `linux-arm64` binaries. Generate credentials:
+Generate credentials on this instance:
 
 ```bash
 openssl rand -hex 32
@@ -31,18 +42,47 @@ openssl rand -hex 32
 /usr/local/bin/monitorozo-server generate-secret
 ```
 
-Place hashes in `server.yaml`. Put plaintext secrets in protected files:
+Place the token hash, password hash and session secret in `server.yaml`. Keep
+only the SMTP password in the protected environment file:
 
 ```bash
-sudo sh -c 'printf "%s\n" "MONITOROZO_AGENT_TOKEN=PASTE_AGENT_TOKEN" > /etc/monitorozo/agent.env'
 sudo sh -c 'printf "%s\n" "MONITOROZO_SMTP_PASSWORD=PASTE_SMTP_PASSWORD" > /etc/monitorozo/server.env'
-sudo chown root:monitorozo-agent /etc/monitorozo/agent.env
 sudo chown root:monitorozo-server /etc/monitorozo/server.env
-sudo chmod 0640 /etc/monitorozo/agent.env /etc/monitorozo/server.env
+sudo chmod 0640 /etc/monitorozo/server.env
+sudo systemctl enable --now monitorozo-server
+curl --fail http://127.0.0.1:8080/readyz
 ```
 
-EnvironmentFile values do not support arbitrary shell escaping. Generate
-URL-safe secrets and avoid spaces or quotes.
+Complete the Nginx/TLS and firewall sections below before configuring the
+agent.
+
+## Production-instance agent installation
+
+Copy the same repository revision and only the agent release binary to the
+production instance:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates
+sudo install -d -m 0755 /opt/monitorozo
+sudo cp -a . /opt/monitorozo/source
+cd /opt/monitorozo/source
+sudo install -d -m 0755 bin
+sudo install -m 0755 dist/monitorozo-agent-linux-amd64 bin/monitorozo-agent
+sudo ./scripts/install.sh agent
+sudo install -o root -g monitorozo-agent -m 0640 config/agent.example.yaml /etc/monitorozo/agent.yaml
+sudo sh -c 'printf "%s\n" "MONITOROZO_AGENT_TOKEN=PASTE_AGENT_TOKEN" > /etc/monitorozo/agent.env'
+sudo chown root:monitorozo-agent /etc/monitorozo/agent.env
+sudo chmod 0640 /etc/monitorozo/agent.env
+sudo systemctl enable --now monitorozo-agent
+sudo systemctl status monitorozo-agent
+sudo journalctl -u monitorozo-agent --since "5 minutes ago" --no-pager
+```
+
+Set `server_url` in `agent.yaml` to the monitoring instance's public HTTPS
+report endpoint and give the host a stable, unique `agent_id`. EnvironmentFile
+values do not support arbitrary shell escaping. Generate URL-safe secrets and
+avoid spaces or quotes.
 
 `queue_size` is the maximum number of durable report files, not an unbounded
 memory queue. At the 10-second default, `60` retains roughly ten minutes.
@@ -51,7 +91,38 @@ inside the agent's writable state directory. The server accepts ordered
 backfill for up to `max_report_age: 24h`. Increase these together only after
 checking disk capacity and the 256 KiB per-report cap.
 
-## AWS security group
+## Docker Compose deployment
+
+For a containerized central server, copy generated production configuration
+next to the Compose file, keep it mode `0600`, and start only the server:
+
+```bash
+sudo install -o root -g root -m 0600 /etc/monitorozo/server.yaml deploy/docker/server.yaml
+docker compose -f deploy/docker/docker-compose.yml config --quiet
+docker compose -f deploy/docker/docker-compose.yml up -d --build server
+docker compose -f deploy/docker/docker-compose.yml ps
+```
+
+Compose overrides the internal listen address but publishes it only on host
+loopback for Nginx. The image is distroless, non-root, read-only, capability
+free, resource limited and database-readiness checked.
+
+The opt-in host agent profile is available when native systemd installation is
+not possible:
+
+```bash
+sudo install -o root -g root -m 0600 /etc/monitorozo/agent.yaml deploy/docker/agent.yaml
+docker compose -f deploy/docker/docker-compose.yml --profile agent up -d --build agent
+```
+
+This profile uses the host PID/UTS namespaces and read-only `/proc`, `/sys` and
+root bind mounts so filesystem statistics describe the host. It never mounts
+`docker.sock`, but exposes more host metadata than the native dedicated-user
+service. The distroless agent image has no `systemctl`; leave
+`systemd_services` empty in container mode. Native systemd is the preferred
+production agent deployment.
+
+## AWS / Lightsail firewall
 
 Inbound rules for the monitoring server:
 
@@ -63,6 +134,9 @@ Inbound rules for the monitoring server:
 
 Do **not** expose TCP 8080. The agent needs only outbound TCP 443. The server
 needs outbound TCP 587 for SES/SMTP and TCP 53/UDP 53 DNS as appropriate.
+Use the same rules in the Lightsail networking firewall. On the production
+agent instance, expose no Monitorozo port: allow only its outbound HTTPS to the
+monitoring instance's public DNS name.
 
 ## Nginx and Let's Encrypt
 
@@ -118,7 +192,8 @@ seconds without a report. Failed/inactive configured systemd units, stopped or
 unhealthy Docker containers, three consecutive HTTP failures, and TLS
 certificates with at most 14 days remaining also fire alerts.
 `alert_cooldown` defaults to 30 minutes. These values are configurable in
-`server.yaml`; restart the server after changes.
+`server.yaml`; `http_failure_count`, `tls_warning_days` and
+`tls_critical_days` tune the probe rules. Restart the server after changes.
 
 ## Optional agent checks
 
@@ -151,70 +226,97 @@ grants root-equivalent control. Prefer leaving Docker checks disabled or
 placing a separately maintained, read-only authorization proxy in front of the
 daemon; never expose the unauthenticated Docker API over TCP.
 
-## Start and inspect services
+## Inspect services
+
+On the monitoring instance:
 
 ```bash
-sudo systemctl enable --now monitorozo-server monitorozo-agent
-sudo systemctl status monitorozo-server monitorozo-agent
+sudo systemctl status monitorozo-server
 curl --fail http://127.0.0.1:8080/healthz
+curl --fail http://127.0.0.1:8080/readyz
 sudo journalctl -u monitorozo-server -f
-sudo journalctl -u monitorozo-agent -f
 sudo journalctl -u monitorozo-server --since "1 hour ago" --no-pager
+```
+
+On the production instance:
+
+```bash
+sudo systemctl status monitorozo-agent
+sudo journalctl -u monitorozo-agent -f
 ```
 
 ## Update and rollback
 
-Build and test the release first. Put new binaries in `bin/`, then:
+Build and test the release first, verify `SHA256SUMS`, and put the new binaries
+in `bin/` on the corresponding instance. The updater makes a
+database/config/binary backup, replaces only the selected component and
+automatically restores the previous state on failure.
+
+On the monitoring instance:
 
 ```bash
-sudo ./scripts/update.sh
+sudo ./scripts/update.sh server
 ```
 
-The script prints the backup directory. Roll back both binaries atomically from
-that directory:
+On the production instance:
 
 ```bash
-sudo systemctl stop monitorozo-agent monitorozo-server
-sudo install -m 0755 /var/lib/monitorozo-server/releases/TIMESTAMP/monitorozo-agent /usr/local/bin/monitorozo-agent
-sudo install -m 0755 /var/lib/monitorozo-server/releases/TIMESTAMP/monitorozo-server /usr/local/bin/monitorozo-server
-sudo systemctl start monitorozo-server monitorozo-agent
-sudo systemctl --no-pager status monitorozo-server monitorozo-agent
+sudo ./scripts/update.sh agent
 ```
 
-Database migrations are forward-only. Back up before updates and restore the
-matching database when rolling back across a schema change.
+The script prints the timestamped release directory. Explicit rollback uses
+that instance's directory and requires confirmation:
+
+```bash
+# Monitoring instance:
+sudo ./scripts/rollback.sh \
+  /var/lib/monitorozo-server/releases/TIMESTAMP --confirm
+
+# Production instance:
+sudo ./scripts/rollback.sh \
+  /var/lib/monitorozo-agent/releases/TIMESTAMP --confirm
+```
+
+Database migrations are forward-only; rollback restores the matching online
+backup when the release directory contains one.
+If the server uses a non-default local listen port, set
+`MONITOROZO_HEALTH_URL=http://127.0.0.1:PORT/readyz` for update, rollback and
+restore commands.
 
 ## Backup and restore
 
-SQLite WAL databases must not be copied while live with plain `cp`. Create a
-consistent online backup and include protected configuration:
+Run backups separately on both instances. SQLite WAL databases must not be
+copied while live with plain `cp`. On the monitoring instance the script uses
+SQLite's online backup and integrity-checks it. On the production instance it
+captures the agent sequence and spool. Both include protected configuration
+and write SHA-256 checksums:
 
 ```bash
-sudo install -d -o root -g root -m 0700 /var/backups/monitorozo
-sudo sqlite3 /var/lib/monitorozo-server/monitorozo.db ".timeout 5000" ".backup '/var/backups/monitorozo/monitorozo.db'"
-sudo tar -C / -czf /var/backups/monitorozo/config-$(date -u +%Y%m%dT%H%M%SZ).tar.gz etc/monitorozo
-sudo sha256sum /var/backups/monitorozo/monitorozo.db
+sudo ./scripts/backup.sh
+# Or choose an explicit absolute destination:
+sudo ./scripts/backup.sh /var/backups/monitorozo/20260724T120000Z
 ```
 
-Encrypt and transfer backups to a separate access-controlled store. Restore:
+Encrypt and transfer each generated directory to a separate access-controlled
+store. Test restores periodically on a replacement instance. A restore
+verifies every checksum, detects the installed component, restores its
+configuration/state/database and verifies service health:
 
 ```bash
-sudo systemctl stop monitorozo-server
-sudo install -o monitorozo-server -g monitorozo-server -m 0640 /var/backups/monitorozo/monitorozo.db /var/lib/monitorozo-server/monitorozo.db
-sudo rm -f /var/lib/monitorozo-server/monitorozo.db-wal /var/lib/monitorozo-server/monitorozo.db-shm
-sudo -u monitorozo-server sqlite3 /var/lib/monitorozo-server/monitorozo.db "PRAGMA integrity_check;"
-sudo systemctl start monitorozo-server
+sudo ./scripts/restore.sh \
+  /var/backups/monitorozo/20260724T120000Z --confirm
 ```
-
-Restore `/etc/monitorozo` from the matching encrypted archive only when
-credentials/configuration also need recovery.
 
 ## Uninstall
 
 Back up first. The safe uninstall retains data and configuration:
 
 ```bash
-sudo ./scripts/uninstall.sh
+# Monitoring instance:
+sudo ./scripts/uninstall.sh server
+
+# Production instance:
+sudo ./scripts/uninstall.sh agent
 ```
 
 After verifying the backup and only if permanent deletion is intended, remove

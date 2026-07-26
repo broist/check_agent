@@ -26,7 +26,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const maxReportBody = 256 << 10
+const (
+	maxReportBody = 256 << 10
+	maxFormBody   = 16 << 10
+)
 
 type AlertSender interface {
 	Send(storage.Alert, string) error
@@ -110,6 +113,7 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.requireAuth(s.logout))
@@ -125,6 +129,18 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, `{"status":"ok"}`)
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 2*time.Second)
+	defer cancel()
+	w.Header().Set("Content-Type", "application/json")
+	if err := s.store.Ping(ctx); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"status":"unavailable"}`)
+		return
+	}
+	_, _ = io.WriteString(w, `{"status":"ready"}`)
 }
 
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +161,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid origin", http.StatusForbidden)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -167,7 +184,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	session, ok := s.sessions.Get(r)
-	if !ok || !s.validOrigin(r) ||
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
+	if !ok || !s.validOrigin(r) || r.ParseForm() != nil ||
 		subtle.ConstantTimeCompare([]byte(session.CSRF), []byte(r.FormValue("csrf_token"))) != 1 {
 		http.Error(w, "invalid CSRF token", http.StatusForbidden)
 		return
@@ -209,6 +227,7 @@ func (s *Server) acknowledgeAlert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid session or origin", http.StatusForbidden)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
 	if err := r.ParseForm(); err != nil ||
 		subtle.ConstantTimeCompare([]byte(session.CSRF), []byte(r.FormValue("csrf_token"))) != 1 {
 		http.Error(w, "invalid CSRF token", http.StatusForbidden)
@@ -276,6 +295,7 @@ func (s *Server) eventStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	channel, unsubscribe := s.events.subscribe()
 	defer unsubscribe()
 	_, _ = io.WriteString(w, ": connected\n\n")
@@ -431,6 +451,7 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	if err := s.templates.ExecuteTemplate(w, name, data); err != nil {
 		s.logger.Error("template render failed", "error", err)
 	}
@@ -470,7 +491,18 @@ func (s *Server) validOrigin(r *http.Request) bool {
 		return true
 	}
 	parsed, err := url.Parse(origin)
-	return err == nil && parsed.Host == r.Host
+	if err != nil {
+		return false
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		(parsed.Path != "" && parsed.Path != "/") {
+		return false
+	}
+	expected, expectedErr := url.Parse(s.cfg.PublicURL)
+	if expectedErr == nil && expected.Host != "" {
+		return parsed.Scheme == expected.Scheme && strings.EqualFold(parsed.Host, expected.Host)
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
 }
 
 func bearerToken(header string) string {

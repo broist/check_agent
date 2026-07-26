@@ -10,7 +10,18 @@ import (
 
 type Collector struct{}
 
+type Paths struct {
+	ProcRoot      string
+	SysRoot       string
+	HostRoot      string
+	MountInfoPath string
+}
+
 func New(_ []string) (*Collector, error) {
+	return nil, errors.New("metric collection is supported only on Linux")
+}
+
+func NewWithPaths(_ []string, _ Paths) (*Collector, error) {
 	return nil, errors.New("metric collection is supported only on Linux")
 }
 

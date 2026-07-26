@@ -1,0 +1,16 @@
+.git
+.github
+.tools
+.cache
+.gopath
+bin
+dist
+coverage.out
+*.db
+*.db-shm
+*.db-wal
+*.local.go
+*.local.yaml
+.env
+deploy/docker/server.yaml
+deploy/docker/agent.yaml

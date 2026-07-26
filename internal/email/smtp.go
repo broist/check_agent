@@ -13,10 +13,13 @@ import (
 )
 
 type Sender struct {
-	cfg config.SMTP
+	cfg       config.SMTP
+	tlsConfig *tls.Config
 }
 
-func New(cfg config.SMTP) *Sender { return &Sender{cfg: cfg} }
+func New(cfg config.SMTP) *Sender {
+	return &Sender{cfg: cfg, tlsConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+}
 
 func (s *Sender) Send(alert storage.Alert, dashboardURL string) error {
 	if !s.cfg.Enabled {
@@ -52,7 +55,9 @@ func (s *Sender) Send(alert storage.Alert, dashboardURL string) error {
 	}
 	defer client.Close()
 	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+		tlsConfig := s.tlsConfig.Clone()
+		tlsConfig.ServerName = host
+		if err := client.StartTLS(tlsConfig); err != nil {
 			return fmt.Errorf("SMTP STARTTLS: %w", err)
 		}
 	} else {

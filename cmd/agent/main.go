@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -13,18 +15,28 @@ import (
 	"github.com/broist/check_agent/internal/checks"
 	"github.com/broist/check_agent/internal/collector"
 	"github.com/broist/check_agent/internal/config"
+	"github.com/broist/check_agent/internal/version"
 )
 
 func main() {
 	configPath := flag.String("config", "/etc/monitorozo/agent.yaml", "configuration file")
+	showVersion := flag.Bool("version", false, "print version information")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("monitorozo-agent %s commit=%s built=%s\n",
+			version.Version, version.Commit, version.BuildTime)
+		return
+	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg, err := config.LoadAgent(*configPath)
 	if err != nil {
 		logger.Error("configuration failed", "error", err)
 		os.Exit(1)
 	}
-	metrics, err := collector.New(cfg.IncludeFSTypes)
+	metrics, err := collector.NewWithPaths(cfg.IncludeFSTypes, collector.Paths{
+		ProcRoot: cfg.ProcRoot, SysRoot: cfg.SysRoot,
+		HostRoot: cfg.HostRoot, MountInfoPath: cfg.MountInfoPath,
+	})
 	if err != nil {
 		logger.Error("collector initialization failed", "error", err)
 		os.Exit(1)
@@ -43,7 +55,14 @@ func main() {
 		os.Exit(1)
 	}
 	sender := agent.NewSender(cfg.ServerURL, cfg.Token, cfg.RequestTimeout)
-	go sender.Run(ctx, spool, func(err error) { logger.Error("delivery failed", "error", err) })
+	var senderWait sync.WaitGroup
+	senderWait.Add(1)
+	go func() {
+		defer senderWait.Done()
+		sender.Run(ctx, spool, func(err error) {
+			logger.Error("delivery failed", "error", err)
+		})
+	}()
 
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
@@ -75,6 +94,7 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
+			senderWait.Wait()
 			logger.Info("agent stopped")
 			return
 		case <-ticker.C:

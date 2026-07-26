@@ -13,9 +13,9 @@ HTTP/HTTPS status and latency, TLS certificate lifetime, and TCP reachability.
 Reports are first committed to a bounded on-disk spool, so short outages and
 agent restarts do not discard pending telemetry.
 
-The exact scope and intentional deferrals are in
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Do not expose development HTTP
-to an untrusted network.
+The exact scope and production-cut non-goals are in
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Do not expose development
+HTTP to an untrusted network.
 
 ## Repository layout
 
@@ -36,12 +36,12 @@ deploy/systemd         hardened native units
 deploy/docker          Dockerfiles and Compose
 migrations             ordered embedded SQL migrations
 docs                   threat model and operations runbook
-scripts                install, update and uninstall helpers
+scripts                install, update, rollback, backup, restore and uninstall helpers
 ```
 
 ## Build and test
 
-Go 1.24 or newer is required.
+Go 1.26.5 or a newer patched Go release is required.
 
 ```bash
 go mod download
@@ -51,7 +51,13 @@ make release VERSION=0.1.0
 ```
 
 Release binaries are statically linked for Linux amd64 and arm64. Version,
-commit and build time are injected with linker flags.
+commit and build time are injected with linker flags and available through
+`monitorozo-agent -version` and `monitorozo-server -version`. CI verifies
+modules, formatting, shell scripts, Compose, `go vet`, race-enabled tests and
+both release architectures. It runs the official Go vulnerability scanner,
+boots the Linux agent, enforces the 30 MiB steady-state RSS target and verifies
+graceful SIGTERM shutdown. Pushing a `v*` tag publishes checksummed GitHub
+release assets.
 
 ## Development quick start
 
@@ -94,6 +100,11 @@ service-specific group.
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for exact Ubuntu, AWS, Nginx,
 Let's Encrypt, SMTP/SES, systemd, logging, backup, restore, update, rollback and
 uninstall procedures.
+
+The central server can run natively or through the hardened Compose service.
+The optional Compose `agent` profile reads host telemetry through explicit
+read-only `/proc`, `/sys` and root mounts; native systemd remains the preferred
+least-privilege production agent deployment.
 
 ## Security
 

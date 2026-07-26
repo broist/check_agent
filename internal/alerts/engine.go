@@ -17,6 +17,15 @@ type Engine struct {
 }
 
 func New(store *storage.Store, cfg config.Server) *Engine {
+	if cfg.HTTPFailureCount == 0 {
+		cfg.HTTPFailureCount = 3
+	}
+	if cfg.TLSWarningDays == 0 {
+		cfg.TLSWarningDays = 14
+	}
+	if cfg.TLSCriticalDays == 0 {
+		cfg.TLSCriticalDays = 3
+	}
 	return &Engine{store: store, cfg: cfg}
 }
 
@@ -94,18 +103,18 @@ func (e *Engine) EvaluateReport(ctx context.Context, report model.Report, now ti
 			AgentID: report.AgentID, RuleKey: "http_failed",
 			Resource: check.Name, Severity: "critical",
 			Value: float64(check.StatusCode), Threshold: 399,
-			Violated: !check.OK, Consecutive: 3,
+			Violated: !check.OK, Consecutive: e.cfg.HTTPFailureCount,
 		})
 		if check.TLSDaysLeft != nil {
 			severity := "warning"
-			if *check.TLSDaysLeft <= 3 {
+			if *check.TLSDaysLeft <= e.cfg.TLSCriticalDays {
 				severity = "critical"
 			}
 			rules = append(rules, storage.RuleEvaluation{
 				AgentID: report.AgentID, RuleKey: "tls_expiring",
 				Resource: check.Name, Severity: severity,
-				Value: *check.TLSDaysLeft, Threshold: 14,
-				Violated: *check.TLSDaysLeft <= 14,
+				Value: *check.TLSDaysLeft, Threshold: e.cfg.TLSWarningDays,
+				Violated: *check.TLSDaysLeft <= e.cfg.TLSWarningDays,
 			})
 		}
 	}

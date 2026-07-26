@@ -1,0 +1,38 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - run: go mod verify
+      - run: test -z "$(gofmt -l .)"
+      - run: shellcheck scripts/*.sh
+      - run: docker compose -f deploy/docker/docker-compose.yml config --quiet
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Build release
+        run: |
+          make release \
+            VERSION="${GITHUB_REF_NAME}" \
+            COMMIT="${GITHUB_SHA}" \
+            BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          scripts/ci-agent-runtime.sh dist/monitorozo-agent-linux-amd64
+          sha256sum dist/monitorozo-* > dist/SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes

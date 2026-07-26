@@ -14,4 +14,7 @@ func TestTokenHash(t *testing.T) {
 	if VerifyToken(token+"x", hash) {
 		t.Fatal("invalid token accepted")
 	}
+	if !ValidTokenHash(hash) || ValidTokenHash("$argon2id$invalid") {
+		t.Fatal("token hash structure validation failed")
+	}
 }

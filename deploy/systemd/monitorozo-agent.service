@@ -12,22 +12,36 @@ EnvironmentFile=-/etc/monitorozo/agent.env
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=15s
+StateDirectory=monitorozo-agent
+StateDirectoryMode=0750
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectProc=invisible
 RestrictSUIDSGID=true
 RestrictNamespaces=true
+RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/monitorozo-agent
+LimitNOFILE=1024
+MemoryHigh=48M
+MemoryMax=64M
 UMask=0027
 
 [Install]
 WantedBy=multi-user.target
-

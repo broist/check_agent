@@ -27,7 +27,9 @@
 | Malicious proxy headers | auth/rate-limit bypass | proxy headers ignored unless trusted proxy is configured | configure exact loopback proxy CIDRs only |
 | Agent privilege escalation | host compromise | dedicated unprivileged user, systemd sandbox, read-only collection | kernel pseudo-files expose host metadata |
 | Docker socket access | root-equivalent host control | disabled by default; explicit opt-in and warning; read-only client behavior | daemon authorization still grants more than the agent uses; prefer a constrained proxy |
+| Containerized host agent visibility | broader host metadata exposure | opt-in Compose profile, non-root user, read-only host mounts, no capabilities, resource/PID limits | host PID namespace and root bind reveal more metadata than native least-privilege mode |
 | Probe target abuse/secret leakage | internal network scanning or credentials stored in telemetry | strict count/name/URL/address validation, per-probe deadlines, URL userinfo rejection and query redaction | configuration editors can still select sensitive internal targets |
+| CI action compromise | release artifact compromise | official actions pinned to immutable commit SHA, read-only default permissions, tag job gets only contents write | hosted runner and upstream Go/base images remain trusted |
 | SQLite corruption/loss | history loss | WAL, busy timeout, online backup procedure | single-node design has no HA |
 | Dependency compromise | binary compromise | few pinned Go modules, CI verification | review and update dependencies regularly |
 

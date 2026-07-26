@@ -29,12 +29,21 @@
 - Responsive dashboard status lists for all optional integrations.
 - Crash-safe bounded agent spool with ordered retry and restart recovery.
 - Bounded-age backfill that preserves replay protection without firing stale alerts.
+- Pinned GitHub Actions CI and tag release workflows with race tests, checksums
+  and amd64/arm64 artifacts.
+- Transactional update with readiness check and automatic rollback, plus
+  verified backup/restore and explicit rollback scripts.
+- Hardened native units, distroless non-root images and an opt-in host-agent
+  Compose profile.
 
-### Deferred to later milestones
+### Explicit non-goals for this production cut
 
-- Expanded multi-host administration and token rotation UI.
-- Amazon SES API integration (SES SMTP works in the MVP).
-- Installer/updater/uninstaller automation beyond safe starter scripts.
+- A multi-tenant fleet administration UI. The requested deployment target is a
+  small two-instance Lightsail setup: one central monitor and one or more
+  configured production agents.
+- Amazon SES API delivery. The production path uses SES-compatible STARTTLS
+  SMTP, which satisfies the alert-mail requirement through AWS's SMTP
+  submission route.
 
 ## Delivery stages and gates
 
@@ -46,10 +55,12 @@
    validated.
 6. **Release gate** — `gofmt`, `go vet`, tests and amd64/arm64 builds pass.
 
-## Next milestones
+## Remaining release evidence
 
-1. Multi-agent administration, token rotation UI and audit browser.
-2. Production CI/release and deployment hardening audit.
+Before declaring the cut complete, the current worktree must pass the full
+local verification suite, GitHub Actions must run green after push, and the
+operator runbook must match the pushed release revision.
 
 No deferred critical security behavior is represented as a TODO in executable
-code. Deferred features remain documented product scope.
+code. The listed non-goals are outside the requested two-instance production
+scope.

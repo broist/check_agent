@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,22 +24,46 @@ type Collector struct {
 	previousNetwork map[string]networkCounters
 	previousAt      time.Time
 	fsTypes         map[string]bool
+	paths           Paths
+}
+
+type Paths struct {
+	ProcRoot      string
+	SysRoot       string
+	HostRoot      string
+	MountInfoPath string
 }
 
 func New(includeFSTypes []string) (*Collector, error) {
-	c := &Collector{fsTypes: make(map[string]bool)}
+	return NewWithPaths(includeFSTypes, Paths{})
+}
+
+func NewWithPaths(includeFSTypes []string, paths Paths) (*Collector, error) {
+	if paths.ProcRoot == "" {
+		paths.ProcRoot = "/proc"
+	}
+	if paths.SysRoot == "" {
+		paths.SysRoot = "/sys"
+	}
+	if paths.HostRoot == "" {
+		paths.HostRoot = "/"
+	}
+	if paths.MountInfoPath == "" {
+		paths.MountInfoPath = filepath.Join(paths.ProcRoot, "self/mountinfo")
+	}
+	c := &Collector{fsTypes: make(map[string]bool), paths: paths}
 	for _, value := range includeFSTypes {
 		c.fsTypes[value] = true
 	}
-	currentCPU, err := readCPU()
+	currentCPU, err := c.readCPU()
 	if err != nil {
 		return nil, err
 	}
-	currentDisk, err := readDiskCounters()
+	currentDisk, err := c.readDiskCounters()
 	if err != nil {
 		return nil, err
 	}
-	currentNetwork, err := readNetworkCounters()
+	currentNetwork, err := c.readNetworkCounters()
 	if err != nil {
 		return nil, err
 	}
@@ -53,15 +78,15 @@ func (c *Collector) Collect() (model.Report, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	currentCPU, err := readCPU()
+	currentCPU, err := c.readCPU()
 	if err != nil {
 		return model.Report{}, err
 	}
-	currentDisk, err := readDiskCounters()
+	currentDisk, err := c.readDiskCounters()
 	if err != nil {
 		return model.Report{}, err
 	}
-	currentNetwork, err := readNetworkCounters()
+	currentNetwork, err := c.readNetworkCounters()
 	if err != nil {
 		return model.Report{}, err
 	}
@@ -74,7 +99,7 @@ func (c *Collector) Collect() (model.Report, error) {
 	diskIO := calculateDiskIO(c.previousDisk, currentDisk, elapsed)
 	networkIO := calculateNetworkIO(c.previousNetwork, currentNetwork, elapsed)
 
-	memoryFile, err := os.Open("/proc/meminfo")
+	memoryFile, err := os.Open(filepath.Join(c.paths.ProcRoot, "meminfo"))
 	if err != nil {
 		return model.Report{}, fmt.Errorf("open meminfo: %w", err)
 	}
@@ -87,11 +112,11 @@ func (c *Collector) Collect() (model.Report, error) {
 		return model.Report{}, closeErr
 	}
 
-	uptime, err := readUptime()
+	uptime, err := c.readUptime()
 	if err != nil {
 		return model.Report{}, err
 	}
-	load1, load5, load15, err := readLoad()
+	load1, load5, load15, err := c.readLoad()
 	if err != nil {
 		return model.Report{}, err
 	}
@@ -117,8 +142,8 @@ func (c *Collector) Collect() (model.Report, error) {
 	}, nil
 }
 
-func readCPU() (cpuTimes, error) {
-	file, err := os.Open("/proc/stat")
+func (c *Collector) readCPU() (cpuTimes, error) {
+	file, err := os.Open(filepath.Join(c.paths.ProcRoot, "stat"))
 	if err != nil {
 		return cpuTimes{}, fmt.Errorf("open proc stat: %w", err)
 	}
@@ -126,8 +151,8 @@ func readCPU() (cpuTimes, error) {
 	return parseCPU(file)
 }
 
-func readDiskCounters() (map[string]diskCounters, error) {
-	file, err := os.Open("/proc/diskstats")
+func (c *Collector) readDiskCounters() (map[string]diskCounters, error) {
+	file, err := os.Open(filepath.Join(c.paths.ProcRoot, "diskstats"))
 	if err != nil {
 		return nil, fmt.Errorf("open diskstats: %w", err)
 	}
@@ -137,15 +162,15 @@ func readDiskCounters() (map[string]diskCounters, error) {
 		return nil, err
 	}
 	for name := range values {
-		if !trackBlockDevice(name) {
+		if !c.trackBlockDevice(name) {
 			delete(values, name)
 		}
 	}
 	return values, nil
 }
 
-func readNetworkCounters() (map[string]networkCounters, error) {
-	file, err := os.Open("/proc/net/dev")
+func (c *Collector) readNetworkCounters() (map[string]networkCounters, error) {
+	file, err := os.Open(filepath.Join(c.paths.ProcRoot, "net/dev"))
 	if err != nil {
 		return nil, fmt.Errorf("open network stats: %w", err)
 	}
@@ -153,18 +178,18 @@ func readNetworkCounters() (map[string]networkCounters, error) {
 	return parseNetworkStats(file)
 }
 
-func trackBlockDevice(name string) bool {
+func (c *Collector) trackBlockDevice(name string) bool {
 	for _, prefix := range []string{"loop", "ram", "fd"} {
 		if strings.HasPrefix(name, prefix) {
 			return false
 		}
 	}
-	_, err := os.Stat("/sys/class/block/" + name + "/partition")
+	_, err := os.Stat(filepath.Join(c.paths.SysRoot, "class/block", name, "partition"))
 	return os.IsNotExist(err)
 }
 
-func readUptime() (float64, error) {
-	data, err := os.ReadFile("/proc/uptime")
+func (c *Collector) readUptime() (float64, error) {
+	data, err := os.ReadFile(filepath.Join(c.paths.ProcRoot, "uptime"))
 	if err != nil {
 		return 0, fmt.Errorf("read uptime: %w", err)
 	}
@@ -179,8 +204,8 @@ func readUptime() (float64, error) {
 	return value, nil
 }
 
-func readLoad() (float64, float64, float64, error) {
-	data, err := os.ReadFile("/proc/loadavg")
+func (c *Collector) readLoad() (float64, float64, float64, error) {
+	data, err := os.ReadFile(filepath.Join(c.paths.ProcRoot, "loadavg"))
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("read loadavg: %w", err)
 	}
@@ -199,7 +224,7 @@ func readLoad() (float64, float64, float64, error) {
 }
 
 func (c *Collector) readFilesystems() ([]model.Filesystem, error) {
-	file, err := os.Open("/proc/self/mountinfo")
+	file, err := os.Open(c.paths.MountInfoPath)
 	if err != nil {
 		return nil, fmt.Errorf("open mountinfo: %w", err)
 	}
@@ -224,8 +249,12 @@ func (c *Collector) readFilesystems() ([]model.Filesystem, error) {
 			continue
 		}
 		seen[mountpoint] = true
+		statTarget, ok := c.statTarget(mountpoint)
+		if !ok {
+			continue
+		}
 		var stat unix.Statfs_t
-		if err := unix.Statfs(mountpoint, &stat); err != nil {
+		if err := unix.Statfs(statTarget, &stat); err != nil {
 			continue
 		}
 		total := stat.Blocks * uint64(stat.Bsize)
@@ -241,6 +270,18 @@ func (c *Collector) readFilesystems() ([]model.Filesystem, error) {
 		}
 	}
 	return result, scanner.Err()
+}
+
+func (c *Collector) statTarget(mountpoint string) (string, bool) {
+	if c.paths.HostRoot == "/" {
+		return mountpoint, true
+	}
+	target := filepath.Join(c.paths.HostRoot, strings.TrimPrefix(mountpoint, "/"))
+	relative, err := filepath.Rel(c.paths.HostRoot, target)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return target, true
 }
 
 func (c *Collector) includeFilesystem(fsType string) bool {

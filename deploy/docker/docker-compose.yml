@@ -4,19 +4,94 @@ services:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
     restart: unless-stopped
+    environment:
+      MONITOROZO_LISTEN: 0.0.0.0:8080
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - ./server.yaml:/etc/monitorozo/server.yaml:ro
+      - type: bind
+        source: ./server.yaml
+        target: /etc/monitorozo/server.yaml
+        read_only: true
+        bind:
+          create_host_path: false
       - monitorozo-data:/var/lib/monitorozo-server
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:mode=1777,size=16m
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1.0
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "/monitorozo-server", "healthcheck", "http://127.0.0.1:8080/readyz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  agent:
+    profiles: ["agent"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.agent
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    uts: host
+    environment:
+      MONITOROZO_PROC_ROOT: /host/proc
+      MONITOROZO_SYS_ROOT: /host/sys
+      MONITOROZO_HOST_ROOT: /host/root
+      MONITOROZO_MOUNTINFO_PATH: /host/proc/1/mountinfo
+    volumes:
+      - type: bind
+        source: ./agent.yaml
+        target: /etc/monitorozo/agent.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - monitorozo-agent-data:/var/lib/monitorozo-agent
+      - type: bind
+        source: /proc
+        target: /host/proc
+        read_only: true
+      - type: bind
+        source: /sys
+        target: /host/sys
+        read_only: true
+      - type: bind
+        source: /
+        target: /host/root
+        read_only: true
+        bind:
+          propagation: rslave
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=8m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 64m
+    cpus: 0.5
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
 volumes:
   monitorozo-data:
-
+  monitorozo-agent-data:

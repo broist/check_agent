@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +70,12 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 	app, err := New(cfg, store, mailer, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
+	}
+	readyRequest := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	readyResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(readyResponse, readyRequest)
+	if readyResponse.Code != http.StatusOK {
+		t.Fatalf("readiness returned %d: %s", readyResponse.Code, readyResponse.Body.String())
 	}
 	report := model.Report{
 		AgentID: "test-01", Timestamp: time.Now().UTC(), Sequence: 1,
@@ -212,5 +219,35 @@ func TestBufferedReportIsStoredWithoutStaleAlertEvaluation(t *testing.T) {
 	report.Timestamp = time.Now().UTC().Add(-25 * time.Hour)
 	if response := send(report); response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expired report returned %d, want 422", response.Code)
+	}
+}
+
+func TestLoginRejectsOversizedForm(t *testing.T) {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("test-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(filepath.Join(t.TempDir(), "form.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	app, err := New(config.Server{
+		AdminPasswordHash:  string(passwordHash),
+		SessionSecret:      "0123456789abcdef0123456789abcdef",
+		SessionIdleTimeout: time.Minute, SessionMaxLifetime: time.Hour,
+		PublicURL: "http://example.test/",
+	}, store, &recordingMailer{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.NewReader("password=" + strings.Repeat("x", maxFormBody))
+	request := httptest.NewRequest(http.MethodPost, "http://example.test/login", body)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://example.test")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want %d", response.Code, http.StatusBadRequest)
 	}
 }

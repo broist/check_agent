@@ -14,6 +14,9 @@ disk_warning_threshold: 85
 disk_critical_threshold: 95
 agent_offline_after: 120s
 alert_cooldown: 30m
+http_failure_count: 3
+tls_warning_days: 14
+tls_critical_days: 3
 trusted_proxy: 127.0.0.0/8
 raw_retention: 168h
 aggregate_retention: 2160h

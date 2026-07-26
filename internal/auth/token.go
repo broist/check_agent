@@ -34,20 +34,33 @@ func HashToken(token string) (string, error) {
 }
 
 func VerifyToken(token, encoded string) bool {
-	parts := strings.Split(encoded, "$")
-	if len(parts) != 6 || parts[1] != "argon2id" ||
-		parts[2] != "v=19" ||
-		parts[3] != fmt.Sprintf("m=%d,t=%d,p=%d", argonMemory, argonTime, argonThreads) {
-		return false
-	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil || len(salt) != 16 {
-		return false
-	}
-	expected, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(expected) != argonKeyLen {
+	salt, expected, ok := parseTokenHash(encoded)
+	if !ok {
 		return false
 	}
 	actual := argon2.IDKey([]byte(token), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 	return subtle.ConstantTimeCompare(actual, expected) == 1
+}
+
+func ValidTokenHash(encoded string) bool {
+	_, _, ok := parseTokenHash(encoded)
+	return ok
+}
+
+func parseTokenHash(encoded string) ([]byte, []byte, bool) {
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" ||
+		parts[2] != "v=19" ||
+		parts[3] != fmt.Sprintf("m=%d,t=%d,p=%d", argonMemory, argonTime, argonThreads) {
+		return nil, nil, false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil || len(salt) != 16 {
+		return nil, nil, false
+	}
+	expected, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil || len(expected) != argonKeyLen {
+		return nil, nil, false
+	}
+	return salt, expected, true
 }

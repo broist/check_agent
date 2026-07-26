@@ -8,6 +8,11 @@ request_timeout: 5s
 queue_size: 60
 state_file: /var/lib/monitorozo-agent/sequence
 spool_directory: /var/lib/monitorozo-agent/spool
+# Native defaults. The Compose agent profile overrides these for host views.
+proc_root: /proc
+sys_root: /sys
+host_root: /
+mountinfo_path: /proc/self/mountinfo
 insecure_dev_http: false
 
 # Optional checks. Omit any section you do not need.

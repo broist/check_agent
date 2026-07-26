@@ -124,7 +124,8 @@ passwords use `monitorozo-server hash-password`.
 
 - Internet clients terminate TLS at Nginx.
 - The server listens on loopback by default.
-- Only `/healthz`, `/login` and the ingestion endpoint are unauthenticated.
+- Only `/healthz`, `/readyz`, `/login` and the ingestion endpoint are
+  unauthenticated.
 - The agent service has no write access outside its state directory.
 - The server service can write only its state directory.
 - Docker checks are disabled by default. Enabling them requires Unix-socket
@@ -139,6 +140,15 @@ restarts. The server
 returns explicit status codes so permanent errors are not retried forever.
 SQLite backup uses its online backup command while WAL is enabled. Service
 deployment keeps the previous binary to permit rollback.
+
+CI runs formatting, module verification, `go vet`, ShellCheck, Compose
+validation, the Go race detector and cross-architecture release builds.
+Immutable action commits are used. Tagged builds publish four static binaries
+and SHA-256 checksums. CI also measures the live Linux agent RSS against the
+30 MiB target and verifies graceful SIGTERM shutdown. Native updates take an
+online SQLite backup when updating the server, stop only the selected
+component, apply its binary, verify health and automatically restore the
+previous binary/database if startup fails.
 
 ## Resource targets
 
