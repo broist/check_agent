@@ -1,76 +1,76 @@
 {{define "dashboard"}}
 <!doctype html>
-<html lang="en">
+<html lang="hu">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Monitorozo</title><link rel="stylesheet" href="/static/style.css">
 <script src="/static/app.js" defer></script></head>
 <body><header><h1>Monitorozo</h1><form method="post" action="/logout">
-<input type="hidden" name="csrf_token" value="{{.CSRF}}"><button>Sign out</button></form></header>
+<input type="hidden" name="csrf_token" value="{{.CSRF}}"><button>Kilépés</button></form></header>
 <main>
-{{if .Alerts}}<section><h2>Active alerts</h2><div class="grid">
+{{if .Alerts}}<section><h2>Aktív riasztások</h2><div class="grid">
 {{range .Alerts}}<article class="card {{.Severity}}"><div class="title">
-<h3>{{.AgentID}} · {{.RuleKey}}{{if .Resource}} · {{.Resource}}{{end}}</h3>
-<span>{{.State}}</span></div>
+<h3>{{.AgentID}} · {{rule .RuleKey}}{{if .Resource}} · {{.Resource}}{{end}}</h3>
+<span>{{alertState .State}}</span></div>
 <strong>{{printf "%.1f" .Value}}</strong>
-<p>Threshold {{printf "%.1f" .Threshold}} · since {{time .StartedAt}}</p>
-{{if .AcknowledgedAt}}<p class="muted">Acknowledged by {{.AcknowledgedBy}}</p>
+<p>Küszöb {{printf "%.1f" .Threshold}} · kezdete: {{time .StartedAt}}</p>
+{{if .AcknowledgedAt}}<p class="muted">Nyugtázta: {{.AcknowledgedBy}}</p>
 {{else}}<form method="post" action="/api/v1/alerts/{{.ID}}/ack">
-<input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button>Acknowledge</button></form>{{end}}
+<input type="hidden" name="csrf_token" value="{{$.CSRF}}"><button>Nyugtázás</button></form>{{end}}
 </article>{{end}}
 </div></section>{{end}}
-<section><h2>Servers</h2>
-{{if not .Reports}}<p class="empty">No reports received yet.</p>{{end}}
+<section><h2>Szerverek</h2>
+{{if not .Reports}}<p class="empty">Még nem érkezett jelentés.</p>{{end}}
 <div class="grid">{{range .Reports}}<article class="card {{status .Timestamp}}">
 <div class="title"><h3>{{.Hostname}}</h3><span>{{online .Timestamp}}</span></div>
-<p class="muted">{{.AgentID}} · last seen {{time .Timestamp}}</p>
+<p class="muted">{{.AgentID}} · utolsó jelentés: {{time .Timestamp}}</p>
 <div class="metrics"><div><span>CPU</span><strong>{{printf "%.1f" .CPUPercent}}%</strong></div>
 <div><span>RAM</span><strong>{{printf "%.1f" .Memory.UsedPercent}}%</strong></div>
-<div><span>Swap</span><strong>{{printf "%.1f" .Memory.SwapPercent}}%</strong></div>
-<div><span>Uptime</span><strong>{{duration .Uptime}}</strong></div></div>
-<div class="chart-header"><h4>CPU / RAM history</h4>
-<select class="history-range" aria-label="History range">
-<option value="1h">1 hour</option><option value="24h" selected>24 hours</option>
-<option value="7d">7 days</option><option value="30d">30 days</option><option value="90d">90 days</option>
+<div><span>Cserehely</span><strong>{{printf "%.1f" .Memory.SwapPercent}}%</strong></div>
+<div><span>Üzemidő</span><strong>{{duration .Uptime}}</strong></div></div>
+<div class="chart-header"><h4>CPU / RAM előzmények</h4>
+<select class="history-range" aria-label="Előzmény időtartama">
+<option value="1h">1 óra</option><option value="24h" selected>24 óra</option>
+<option value="7d">7 nap</option><option value="30d">30 nap</option><option value="90d">90 nap</option>
 </select></div>
-<div class="chart" data-agent="{{.AgentID}}"><canvas aria-label="CPU and RAM history"></canvas>
-<p class="chart-empty" hidden>No historical data.</p>
+<div class="chart" data-agent="{{.AgentID}}"><canvas aria-label="CPU és RAM előzmények"></canvas>
+<p class="chart-empty" hidden>Nincs előzményadat.</p>
 <div class="legend"><span class="cpu">CPU</span><span class="ram">RAM</span></div></div>
-<h4>Filesystems</h4><div class="filesystems">{{range .Filesystems}}
+<h4>Fájlrendszerek</h4><div class="filesystems">{{range .Filesystems}}
 <div><span>{{.Mountpoint}}</span><progress max="100" value="{{.UsedPercent}}"></progress>
 <strong>{{printf "%.1f" .UsedPercent}}%</strong></div>{{end}}</div>
-{{if .DiskIO}}<h4>Disk I/O</h4><div class="io-list">{{range .DiskIO}}
-<div><strong>{{.Device}}</strong><span>Read {{rate .ReadBytesPerSecond}}</span>
-<span>Write {{rate .WriteBytesPerSecond}}</span></div>{{end}}</div>{{end}}
-{{if .Networks}}<h4>Network</h4><div class="io-list">{{range .Networks}}
+{{if .DiskIO}}<h4>Lemez I/O</h4><div class="io-list">{{range .DiskIO}}
+<div><strong>{{.Device}}</strong><span>Olvasás {{rate .ReadBytesPerSecond}}</span>
+<span>Írás {{rate .WriteBytesPerSecond}}</span></div>{{end}}</div>{{end}}
+{{if .Networks}}<h4>Hálózat</h4><div class="io-list">{{range .Networks}}
 <div><strong>{{.Interface}}</strong><span>RX {{rate .ReceiveBytesRate}}</span>
 <span>TX {{rate .TransmitBytesRate}}</span></div>{{end}}</div>{{end}}
-{{if .Services}}<h4>systemd services</h4><div class="status-list">{{range .Services}}
+{{if .Services}}<h4>systemd szolgáltatások</h4><div class="status-list">{{range .Services}}
 <div><strong>{{.Name}}</strong>
 <span class="status-pill {{if eq .ActiveState "active"}}ok{{else if eq .ActiveState "failed"}}critical{{else if eq .ActiveState "inactive"}}critical{{else}}unknown{{end}}">
-{{.ActiveState}}{{if .SubState}} / {{.SubState}}{{end}}</span>
+{{serviceState .ActiveState}}{{if .SubState}} / {{serviceState .SubState}}{{end}}</span>
 {{if .Error}}<small>{{.Error}}</small>{{end}}</div>{{end}}</div>{{end}}
 {{if .Docker.Enabled}}<h4>Docker</h4>
-{{if not .Docker.Available}}<p class="integration-unavailable">Docker unavailable{{if .Docker.Error}}: {{.Docker.Error}}{{end}}</p>
+{{if not .Docker.Available}}<p class="integration-unavailable">Docker nem elérhető{{if .Docker.Error}}: {{.Docker.Error}}{{end}}</p>
 {{else}}<div class="status-list">{{range .Docker.Containers}}
 <div><strong>{{.Name}}</strong>
 <span class="status-pill {{if and (eq .State "running") (ne .Health "unhealthy")}}ok{{else}}critical{{end}}">
-{{.State}}{{if .Health}} / {{.Health}}{{end}}</span></div>
-{{else}}<p class="muted">No Docker containers.</p>{{end}}</div>{{end}}{{end}}
-{{if .HTTPChecks}}<h4>HTTP / HTTPS checks</h4><div class="status-list">{{range .HTTPChecks}}
+{{containerState .State}}{{if .Health}} / {{containerState .Health}}{{end}}</span></div>
+{{else}}<p class="muted">Nincs Docker konténer.</p>{{end}}</div>{{end}}{{end}}
+{{if .HTTPChecks}}<h4>HTTP / HTTPS ellenőrzések</h4><div class="status-list">{{range .HTTPChecks}}
 <div><strong>{{.Name}}</strong><span class="status-pill {{if .OK}}ok{{else}}critical{{end}}">
-{{if .OK}}HTTP {{.StatusCode}}{{else}}failed{{end}} &middot; {{printf "%.0f" .ResponseMS}} ms</span>
-<small>{{.URL}}{{if .TLSDaysLeft}} &middot; TLS {{printf "%.1f" .TLSDays}} days{{end}}{{if .Error}} &middot; {{.Error}}{{end}}</small></div>
+{{if .OK}}HTTP {{.StatusCode}}{{else}}sikertelen{{end}} · {{printf "%.0f" .ResponseMS}} ms</span>
+<small>{{.URL}}{{if .TLSDaysLeft}} · TLS {{printf "%.1f" .TLSDays}} nap{{end}}{{if .Error}} · {{.Error}}{{end}}</small></div>
 {{end}}</div>{{end}}
-{{if .TCPChecks}}<h4>TCP checks</h4><div class="status-list">{{range .TCPChecks}}
+{{if .TCPChecks}}<h4>TCP ellenőrzések</h4><div class="status-list">{{range .TCPChecks}}
 <div><strong>{{.Name}}</strong><span class="status-pill {{if .Reachable}}ok{{else}}critical{{end}}">
-{{if .Reachable}}reachable{{else}}unreachable{{end}} &middot; {{printf "%.0f" .ResponseMS}} ms</span>
-<small>{{.Address}}{{if .Error}} &middot; {{.Error}}{{end}}</small></div>
+{{if .Reachable}}elérhető{{else}}nem elérhető{{end}} · {{printf "%.0f" .ResponseMS}} ms</span>
+<small>{{.Address}}{{if .Error}} · {{.Error}}{{end}}</small></div>
 {{end}}</div>{{end}}
 </article>{{end}}</div></section>
-{{if .AlertHistory}}<section><h2>Alert history</h2><div class="alert-history">
-{{range .AlertHistory}}<div><strong>{{.AgentID}} · {{.RuleKey}}{{if .Resource}} · {{.Resource}}{{end}}</strong>
-<span class="{{.Severity}}">{{.Severity}}</span><span>{{time .StartedAt}}</span>
-<span>{{if .ResolvedAt}}resolved {{time .ResolvedAt}}{{end}}</span></div>{{end}}
+{{if .AlertHistory}}<section><h2>Riasztási előzmények</h2><div class="alert-history">
+{{range .AlertHistory}}<div><strong>{{.AgentID}} · {{rule .RuleKey}}{{if .Resource}} · {{.Resource}}{{end}}</strong>
+<span class="{{.Severity}}">{{severity .Severity}}</span><span>{{time .StartedAt}}</span>
+<span>{{if .ResolvedAt}}megoldva: {{time .ResolvedAt}}{{end}}</span></div>{{end}}
 </div></section>{{end}}
 </main></body></html>
 {{end}}

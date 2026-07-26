@@ -61,7 +61,7 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 	funcs := template.FuncMap{
 		"time": func(value time.Time) string { return value.Local().Format("2006-01-02 15:04:05") },
 		"duration": func(seconds uint64) string {
-			return (time.Duration(seconds) * time.Second).Round(time.Minute).String()
+			return formatHungarianDuration(time.Duration(seconds) * time.Second)
 		},
 		"rate": func(value float64) string {
 			units := []string{"B/s", "KiB/s", "MiB/s", "GiB/s"}
@@ -74,9 +74,9 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 		},
 		"online": func(value time.Time) string {
 			if time.Since(value) <= cfg.AgentOfflineAfter {
-				return "online"
+				return "elérhető"
 			}
-			return "offline"
+			return "nem elérhető"
 		},
 		"status": func(value time.Time) string {
 			if time.Since(value) <= cfg.AgentOfflineAfter {
@@ -84,6 +84,11 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 			}
 			return "offline"
 		},
+		"alertState":     labelAlertState,
+		"severity":       labelSeverity,
+		"rule":           labelRule,
+		"serviceState":   labelServiceState,
+		"containerState": labelContainerState,
 	}
 	templates, err := template.New("pages").Funcs(funcs).ParseFS(web.Files, "*.html")
 	if err != nil {
@@ -108,6 +113,121 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 		result.trustedProxy = network
 	}
 	return result, nil
+}
+
+func formatHungarianDuration(value time.Duration) string {
+	value = value.Round(time.Minute)
+	if value < time.Minute {
+		return "< 1 perc"
+	}
+	days := value / (24 * time.Hour)
+	value -= days * 24 * time.Hour
+	hours := value / time.Hour
+	value -= hours * time.Hour
+	minutes := value / time.Minute
+	parts := make([]string, 0, 3)
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%d nap", days))
+	}
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%d óra", hours))
+	}
+	if minutes > 0 && days == 0 {
+		parts = append(parts, fmt.Sprintf("%d perc", minutes))
+	}
+	if len(parts) == 0 {
+		return "0 perc"
+	}
+	return strings.Join(parts, " ")
+}
+
+func labelAlertState(value string) string {
+	switch value {
+	case "pending":
+		return "várakozik"
+	case "firing":
+		return "aktív"
+	case "resolved":
+		return "megoldva"
+	default:
+		return value
+	}
+}
+
+func labelSeverity(value string) string {
+	switch value {
+	case "critical":
+		return "kritikus"
+	case "warning":
+		return "figyelmeztetés"
+	default:
+		return value
+	}
+}
+
+func labelRule(value string) string {
+	switch value {
+	case "cpu_high":
+		return "magas CPU használat"
+	case "memory_high":
+		return "magas memóriahasználat"
+	case "agent_offline":
+		return "agent nem elérhető"
+	case "disk_warning":
+		return "magas lemezhasználat"
+	case "disk_critical":
+		return "kritikus lemezhasználat"
+	case "systemd_unavailable":
+		return "systemd szolgáltatás nem elérhető"
+	case "docker_stopped":
+		return "Docker konténer leállt"
+	case "docker_unhealthy":
+		return "Docker konténer hibás"
+	case "http_failed":
+		return "HTTP ellenőrzés sikertelen"
+	case "tls_expiring":
+		return "TLS tanúsítvány lejár"
+	default:
+		return value
+	}
+}
+
+func labelServiceState(value string) string {
+	switch value {
+	case "active":
+		return "aktív"
+	case "inactive":
+		return "inaktív"
+	case "failed":
+		return "hibás"
+	case "unknown":
+		return "ismeretlen"
+	default:
+		return value
+	}
+}
+
+func labelContainerState(value string) string {
+	switch value {
+	case "running":
+		return "fut"
+	case "exited":
+		return "kilépett"
+	case "created":
+		return "létrehozva"
+	case "paused":
+		return "szüneteltetve"
+	case "restarting":
+		return "újraindul"
+	case "dead":
+		return "halott"
+	case "healthy":
+		return "egészséges"
+	case "unhealthy":
+		return "hibás"
+	default:
+		return value
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -154,11 +274,11 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	ip := s.clientIP(r)
 	if !s.loginLimiter.Allow(ip) {
-		http.Error(w, "too many login attempts", http.StatusTooManyRequests)
+		http.Error(w, "túl sok bejelentkezési próbálkozás", http.StatusTooManyRequests)
 		return
 	}
 	if !s.validOrigin(r) {
-		http.Error(w, "invalid origin", http.StatusForbidden)
+		http.Error(w, "érvénytelen eredet", http.StatusForbidden)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
@@ -170,7 +290,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		time.Sleep(250 * time.Millisecond)
 		w.WriteHeader(http.StatusUnauthorized)
-		s.render(w, "login", struct{ Error string }{Error: "Invalid credentials"})
+		s.render(w, "login", struct{ Error string }{Error: "Hibás jelszó"})
 		return
 	}
 	if _, err := s.sessions.Create(w); err != nil {
@@ -187,7 +307,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
 	if !ok || !s.validOrigin(r) || r.ParseForm() != nil ||
 		subtle.ConstantTimeCompare([]byte(session.CSRF), []byte(r.FormValue("csrf_token"))) != 1 {
-		http.Error(w, "invalid CSRF token", http.StatusForbidden)
+		http.Error(w, "érvénytelen CSRF token", http.StatusForbidden)
 		return
 	}
 	s.sessions.Delete(w, r)
@@ -230,7 +350,7 @@ func (s *Server) acknowledgeAlert(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
 	if err := r.ParseForm(); err != nil ||
 		subtle.ConstantTimeCompare([]byte(session.CSRF), []byte(r.FormValue("csrf_token"))) != 1 {
-		http.Error(w, "invalid CSRF token", http.StatusForbidden)
+		http.Error(w, "érvénytelen CSRF token", http.StatusForbidden)
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)

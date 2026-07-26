@@ -68,7 +68,7 @@ async function loadChart(container) {
     const payload = await response.json();
     drawChart(container, payload.points || []);
   } catch (error) {
-    container.querySelector(".chart-empty").textContent = "History unavailable.";
+    container.querySelector(".chart-empty").textContent = "Az előzmények nem érhetők el.";
     container.querySelector(".chart-empty").hidden = false;
   }
 }
