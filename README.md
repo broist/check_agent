@@ -41,7 +41,7 @@ scripts                install, update, rollback, backup, restore and uninstall 
 
 ## Build and test
 
-Go 1.26.5 or a newer patched Go release is required.
+Go 1.27.1 or a newer patched Go release is required.
 
 ```bash
 go mod download
