@@ -10,8 +10,12 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
+	"mime"
+	"mime/quotedprintable"
 	"net"
+	"net/mail"
 	"strings"
 	"testing"
 	"time"
@@ -42,11 +46,11 @@ func TestSenderSTARTTLS(t *testing.T) {
 	sender.tlsConfig.RootCAs = roots
 	started := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
 	resolved := started.Add(3*time.Minute + 12*time.Second)
-	err = sender.Send(storage.Alert{
+	err = sender.SendTo(storage.Alert{
 		AgentID: "prod-1", RuleKey: "disk", Resource: "/",
 		Severity: "critical", State: "resolved", Value: 97, Threshold: 95,
 		StartedAt: started, ResolvedAt: &resolved,
-	}, "https://monitor.example.com/")
+	}, "https://monitor.example.com/", "chosen@example.com")
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -54,13 +58,26 @@ func TestSenderSTARTTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := <-message
+	parsed, err := mail.ReadMessage(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, err := new(mime.WordDecoder).DecodeHeader(parsed.Header.Get("Subject"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedBody, err := io.ReadAll(quotedprintable.NewReader(parsed.Body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := subject + "\nTo: " + parsed.Header.Get("To") + "\n" + string(decodedBody)
 	for _, expected := range []string{
-		"Subject: [Monitorozo] critical resolved on prod-1",
-		"Server: prod-1", "Severity: critical", "Rule: disk",
-		"Resource: /", "Value: 97.00", "Threshold: 95.00",
-		"Duration: 3m12s", "Dashboard: https://monitor.example.com/",
+		"HELYREÁLLT", "prod-1", "Tárhely",
+		"To: chosen@example.com",
+		"Érintett erőforrás / útvonal: /", "97.0%", "95.0%",
+		"Hiba időtartama: 3m12s", "https://monitor.example.com/", "df -h -- '/'", "du -xhd1 -- '/'",
 	} {
-		if !strings.Contains(body, expected) {
+		if !strings.Contains(strings.ToLower(decoded), strings.ToLower(expected)) {
 			t.Errorf("message does not contain %q:\n%s", expected, body)
 		}
 	}
@@ -91,8 +108,8 @@ func TestSenderRejectsPlainSMTP(t *testing.T) {
 }
 
 func TestDisabledSenderDoesNotConnect(t *testing.T) {
-	if err := New(config.SMTP{}).Send(storage.Alert{}, ""); err != nil {
-		t.Fatal(err)
+	if err := New(config.SMTP{}).Send(storage.Alert{}, ""); err == nil {
+		t.Fatal("disabled SMTP must not report delivery success")
 	}
 }
 

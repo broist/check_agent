@@ -17,15 +17,25 @@ A dashboard a beérkező agent jelentésekből mutatja a szerver állapotát.
 
 Fontos mezők:
 
-- **Szerverek**: minden bejelentkezett agent külön kártyán jelenik meg.
-- **Elérhető / nem elérhető**: az utolsó jelentés ideje alapján számolt állapot.
+- **Szerverek**: a konfigurált agentek is látszanak, akkor is, ha még nincs mérésük.
+- **Kapcsolat és mérés**: az utolsó kapcsolat és a mérés frissessége külön állapot.
+  A kapcsolódó agent küldhet régi, korábban sorba állított adatokat is.
 - **CPU**: aktuális processzorhasználat százalékban.
 - **RAM**: aktuális memóriahasználat százalékban.
-- **Cserehely**: swap használat.
+- **Cserehely**: swap használat a lenyitható részletekben, ha van swap.
 - **Üzemidő**: a figyelt szerver uptime értéke.
-- **Fájlrendszerek**: mountpointonkénti lemezhasználat.
-- **Lemez I/O**: olvasási és írási sebesség.
-- **Hálózat**: RX/TX forgalom interfészenként.
+- **Tárhelyhasználat**: szerveroldali csatolási útvonal, eszköz, foglaltság,
+  szabad hely és változás az előző méréshez képest, a két mérés közti idővel.
+  Összehasonlítás csak azonos útvonal, eszköz és teljes kapacitás esetén történik.
+  Ez teljes fájlrendszert mér, nem almappákat. A lemezriasztás megadja a
+  megfelelő `df` és `du` ellenőrzés útvonalát is.
+- **Lemez I/O és hálózat**: a lenyitható részletekben; az írási sebesség
+  nem azonos a tárhely foglaltságának növekedésével.
+
+A mérések oldalújratöltés nélkül frissülnek. A lenyitott részletek, a grafikon
+időtartama és az email-űrlap megmaradnak. A rendszer 15 másodpercenként is
+ellenőrzi az állapotot, így az offline állapot élő esemény nélkül is megjelenik.
+Frissítési hiba esetén az utolsó adatok maradnak láthatók, hibaüzenettel.
 
 ## Előzmények
 
@@ -41,8 +51,9 @@ A nyers adatok alapból 7 napig, az órás aggregátumok 90 napig maradnak meg.
 
 ## Riasztások
 
-Az **Aktív riasztások** szekció csak azokat a riasztásokat mutatja, amelyek még
-nincsenek nyugtázva.
+A **Beavatkozásra vár** szekció a fennálló riasztásokat mutatja, elöl a kritikus
+hibákkal. Minden riasztás tartalmazza a mért értéket, a küszöböt, az érintett
+szervert és erőforrást, valamint az ellenőrzéshez javasolt teendőt.
 
 Tipikus riasztások:
 
@@ -61,13 +72,37 @@ Ha egy riasztásról tudsz, kattints a **Nyugtázás** gombra.
 
 Nyugtázás után:
 
-- a riasztás eltűnik az Aktív riasztások listából;
+- a riasztás látható marad, „Nyugtázva · a hiba még fennáll” jelöléssel;
 - az adatbázisban megmarad nyugtázottként;
 - ha a probléma később ténylegesen megszűnik, a rendszer megoldottnak zárja;
 - ha ugyanaz a probléma újra külön eseményként jelentkezik, újra megjelenhet.
 
-Ez azért hasznos, mert a dashboardon csak az új vagy még nem kezelt problémák
-maradnak szem előtt.
+A nyugtázás nem javítja meg a hibát, ezért nem jelöl egészségesnek egy továbbra
+is hibás erőforrást.
+
+## Email-értesítések
+
+Belépés után nyisd meg az **Email-értesítések** fület. Add meg a címzettet,
+kapcsold be a küldést, majd ments. Alapértelmezésben a kritikus riasztások és
+a helyreállások küldhetők; a figyelmeztetések külön kapcsolhatók.
+A beállítások az SQLite-adatbázisban maradnak, újraindítás után is érvényesek,
+és nem függenek attól, hogy be vagy-e jelentkezve.
+
+A **Teszt email küldése** az űrlapon szereplő címre küld, mentés nélkül.
+A siker azt jelenti, hogy az SMTP-kiszolgáló elfogadta a levelet; a címzett
+postaládáját és spam mappáját is ellenőrizni kell. Percenként legfeljebb három
+teszt küldhető. Hibánál a felület jelzi, melyik beállítást kell ellenőrizni.
+
+Az SMTP-kapcsolatot továbbra is a szerveren kell megadni a `server.yaml`
+`smtp` részében: `enabled`, `address` (STARTTLS, jellemzően 587-es port),
+`from`, `username`, és kezdeti `to`. A jelszó a `MONITOROZO_SMTP_PASSWORD`
+környezeti változóval adható meg. Ezután indítsd újra a szervert.
+A felületen mentett címzett felülírja a YAML `to` értékét.
+Az SMTP-jelszó nem kerül a böngészőbe vagy az értesítési beállítások táblájába.
+
+A kikapcsolt vagy kiszűrt értesítéseket a rendszer elnyomottként rögzíti,
+nem sikeresen elküldöttként. A későbbi bekapcsolás nem küldi újra ezeket.
+A valódi küldési hibák a meglévő háttérfolyamatban újrapróbálhatók.
 
 ## Riasztási előzmények
 

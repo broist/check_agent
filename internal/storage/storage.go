@@ -25,6 +25,8 @@ type Store struct {
 }
 
 type Alert struct {
+	Hostname          string
+	Target            string
 	ID                int64
 	AgentID           string
 	RuleKey           string
@@ -534,6 +536,17 @@ func (s *Store) ApplyRule(ctx context.Context, evaluation RuleEvaluation, now ti
 				return false, err
 			}
 			changed = true
+		} else if existing.State == "firing" && existing.Severity != "critical" && evaluation.Severity == "critical" {
+			_, err := tx.ExecContext(ctx, `UPDATE alerts SET severity=?, value=?, threshold=?,
+				violation_count=?, notification_state='pending', acknowledged_at=NULL, acknowledged_by=NULL WHERE id=?`,
+				evaluation.Severity, evaluation.Value, evaluation.Threshold, nextCount, existing.ID)
+			if err != nil {
+				return false, err
+			}
+			if err := auditRuleTx(ctx, tx, evaluation, "escalated"); err != nil {
+				return false, err
+			}
+			changed = true
 		} else {
 			_, err := tx.ExecContext(ctx, `UPDATE alerts SET severity=?, value=?,
 				threshold=?, violation_count=? WHERE id=?`, evaluation.Severity,
@@ -593,14 +606,24 @@ func (s *Store) NotificationInCooldown(ctx context.Context, alert Alert, cooldow
 	}
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM alerts
-		WHERE agent_id=? AND rule_key=? AND resource=? AND id<>?
+		WHERE agent_id=? AND rule_key=? AND resource=? AND id<>? AND severity=?
 		AND notification_state='sent' AND last_notified_at>=?`,
-		alert.AgentID, alert.RuleKey, alert.Resource, alert.ID,
+		alert.AgentID, alert.RuleKey, alert.Resource, alert.ID, alert.Severity,
 		now.UTC().Add(-cooldown).Format(time.RFC3339Nano)).Scan(&count)
 	return count > 0, err
 }
 
 func (s *Store) MarkAlertNotification(ctx context.Context, id int64, state string, now time.Time) error {
+	return s.markAlertNotification(ctx, id, state, now, nil)
+}
+
+// SMTP runs outside the database transaction. Do not consume a newer transition
+// (for example a recovery) that happened while this notification was in flight.
+func (s *Store) MarkAlertDelivery(ctx context.Context, alert Alert, state string, now time.Time) error {
+	return s.markAlertNotification(ctx, alert.ID, state, now, &alert)
+}
+
+func (s *Store) markAlertNotification(ctx context.Context, id int64, state string, now time.Time, expected *Alert) error {
 	if state != "sent" && state != "suppressed" {
 		return errors.New("invalid notification state")
 	}
@@ -608,9 +631,13 @@ func (s *Store) MarkAlertNotification(ctx context.Context, id int64, state strin
 	if state == "sent" {
 		notifiedAt = now.UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE alerts SET notification_state=?,
-		last_notified_at=COALESCE(?, last_notified_at) WHERE id=?`,
-		state, notifiedAt, id)
+	query := `UPDATE alerts SET notification_state=?, last_notified_at=COALESCE(?, last_notified_at) WHERE id=?`
+	args := []any{state, notifiedAt, id}
+	if expected != nil {
+		query += ` AND state=? AND severity=? AND notification_state='pending'`
+		args = append(args, expected.State, expected.Severity)
+	}
+	_, err := s.db.ExecContext(ctx, query, args...)
 	return err
 }
 

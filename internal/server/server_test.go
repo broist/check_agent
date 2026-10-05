@@ -26,7 +26,7 @@ type recordingMailer struct {
 	alerts []storage.Alert
 }
 
-func (m *recordingMailer) Send(alert storage.Alert, _ string) error {
+func (m *recordingMailer) SendTo(alert storage.Alert, _, _ string) error {
 	m.alerts = append(m.alerts, alert)
 	return nil
 }
@@ -57,6 +57,7 @@ func TestIngestEndToEndAndReplayProtection(t *testing.T) {
 		MemoryAlertThreshold: 90, DiskWarningThreshold: 85,
 		DiskCriticalThreshold: 95, AgentOfflineAfter: 2 * time.Minute,
 		RawRetention: 7 * 24 * time.Hour,
+		SMTP:         config.SMTP{Enabled: true, To: "operator@example.com"},
 	}
 	store, err := storage.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

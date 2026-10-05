@@ -32,7 +32,7 @@ const (
 )
 
 type AlertSender interface {
-	Send(storage.Alert, string) error
+	SendTo(storage.Alert, string, string) error
 }
 
 type Server struct {
@@ -48,18 +48,27 @@ type Server struct {
 	events       *broker
 	alerts       *alerts.Engine
 	notifyWake   chan struct{}
+	emailLimiter *auth.Limiter
 }
 
 type dashboardData struct {
-	CSRF         string
-	Reports      []model.Report
-	Alerts       []storage.Alert
-	AlertHistory []storage.Alert
+	CSRF          string
+	Reports       []serverView
+	Alerts        []storage.Alert
+	AlertHistory  []storage.Alert
+	Preferences   storage.NotificationPreferences
+	SMTPReady     bool
+	SMTPAddress   string
+	OnlineCount   int
+	CriticalCount int
+	DiskCount     int
 }
 
 func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *slog.Logger) (*Server, error) {
 	funcs := template.FuncMap{
-		"time": func(value time.Time) string { return value.Local().Format("2006-01-02 15:04:05") },
+		"describe": alerts.Describe,
+		"bytes":    formatBytes,
+		"time":     func(value time.Time) string { return value.Local().Format("2006-01-02 15:04:05") },
 		"duration": func(seconds uint64) string {
 			return formatHungarianDuration(time.Duration(seconds) * time.Second)
 		},
@@ -104,6 +113,7 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 		events:       newBroker(),
 		alerts:       alerts.New(store, cfg),
 		notifyWake:   make(chan struct{}, 1),
+		emailLimiter: auth.NewLimiter(3, time.Minute),
 	}
 	if cfg.TrustedProxy != "" {
 		_, network, err := net.ParseCIDR(cfg.TrustedProxy)
@@ -240,6 +250,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/reports", s.ingest)
 	mux.HandleFunc("GET /api/v1/history", s.requireAuth(s.history))
 	mux.HandleFunc("GET /api/v1/events", s.requireAuth(s.eventStream))
+	mux.HandleFunc("GET /api/v1/dashboard", s.requireAuth(s.dashboard))
+	mux.HandleFunc("POST /api/v1/notifications", s.requireAuth(s.saveNotifications))
+	mux.HandleFunc("POST /api/v1/notifications/test", s.requireAuth(s.testNotification))
 	mux.HandleFunc("POST /api/v1/alerts/{id}/ack", s.requireAuth(s.acknowledgeAlert))
 	mux.Handle("GET /static/", http.FileServer(http.FS(web.Files)))
 	mux.HandleFunc("GET /", s.requireAuth(s.dashboard))
@@ -324,7 +337,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	alerts, err := s.store.UnacknowledgedActiveAlerts(ctx)
+	alerts, err := s.store.ActiveAlerts(ctx)
 	if err != nil {
 		s.logger.Error("load alerts failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -336,9 +349,17 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, "dashboard", dashboardData{
-		CSRF: session.CSRF, Reports: reports, Alerts: alerts, AlertHistory: history,
-	})
+	data, err := s.dashboardView(ctx, reports, alerts)
+	if err != nil {
+		http.Error(w, "Az állapot nem tölthető be.", http.StatusInternalServerError)
+		return
+	}
+	data.CSRF, data.AlertHistory = session.CSRF, history
+	name := "dashboard"
+	if r.URL.Path == "/api/v1/dashboard" {
+		name = "overview"
+	}
+	s.render(w, name, data)
 }
 
 func (s *Server) acknowledgeAlert(w http.ResponseWriter, r *http.Request) {
@@ -529,6 +550,11 @@ func (s *Server) Run(ctx context.Context) {
 func (s *Server) processNotifications(ctx context.Context) {
 	operationCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	prefs, err := s.notificationPreferences(operationCtx)
+	if err != nil {
+		s.logger.Error("load notification preferences failed", "error", err)
+		return
+	}
 	pending, err := s.store.PendingNotifications(operationCtx, 50)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -536,7 +562,30 @@ func (s *Server) processNotifications(ctx context.Context) {
 		}
 		return
 	}
+	var reports []model.Report
+	if len(pending) > 0 && prefs.Enabled && s.cfg.SMTP.Enabled {
+		reports, err = s.store.LatestReports(operationCtx)
+		if err != nil {
+			s.logger.Error("load notification context failed", "error", err)
+			return
+		}
+	}
 	for _, alert := range pending {
+		if operationCtx.Err() != nil {
+			return
+		}
+		for _, report := range reports {
+			if report.AgentID == alert.AgentID {
+				alert = alerts.WithReport(alert, report)
+				break
+			}
+		}
+		if !s.cfg.SMTP.Enabled || !prefs.Enabled || (alert.Severity == "warning" && !prefs.Warnings) || (alert.State == "resolved" && !prefs.Recovery) {
+			if err := s.store.MarkAlertDelivery(operationCtx, alert, "suppressed", time.Now()); err != nil {
+				s.logger.Error("suppress notification failed", "error", err)
+			}
+			continue
+		}
 		inCooldown, err := s.store.NotificationInCooldown(
 			operationCtx, alert, s.cfg.AlertCooldown, time.Now())
 		if err != nil {
@@ -544,16 +593,16 @@ func (s *Server) processNotifications(ctx context.Context) {
 			continue
 		}
 		if inCooldown {
-			if err := s.store.MarkAlertNotification(operationCtx, alert.ID, "suppressed", time.Now()); err != nil {
+			if err := s.store.MarkAlertDelivery(operationCtx, alert, "suppressed", time.Now()); err != nil {
 				s.logger.Error("suppress alert notification failed", "error", err, "alert_id", alert.ID)
 			}
 			continue
 		}
-		if err := s.mailer.Send(alert, s.cfg.PublicURL); err != nil {
+		if err := s.mailer.SendTo(alert, s.cfg.PublicURL, prefs.Recipient); err != nil {
 			s.logger.Error("alert email failed", "error", err, "agent_id", alert.AgentID)
 			continue
 		}
-		if err := s.store.MarkAlertNotification(operationCtx, alert.ID, "sent", time.Now()); err != nil {
+		if err := s.store.MarkAlertDelivery(operationCtx, alert, "sent", time.Now()); err != nil {
 			s.logger.Error("mark alert notification failed", "error", err, "alert_id", alert.ID)
 		}
 	}
@@ -582,7 +631,8 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		// Keep the same-origin form POST Origin header while hiding cross-origin referrers.
+		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		if s.cfg.SecureCookies {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
@@ -656,7 +706,7 @@ func validAgentID(value string) bool {
 		return false
 	}
 	for _, character := range value {
-		if !(character == '-' || character == '_' || character == '.' ||
+		if !(character == '-' || character == '_' || character == '.' || character == '@' ||
 			character >= 'a' && character <= 'z' ||
 			character >= 'A' && character <= 'Z' ||
 			character >= '0' && character <= '9') {

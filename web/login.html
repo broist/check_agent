@@ -1,11 +1,2 @@
 {{define "login"}}
-<!doctype html>
-<html lang="hu">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Monitorozo bejelentkezés</title><link rel="stylesheet" href="/static/style.css"></head>
-<body class="login"><main class="login-card"><h1>Monitorozo</h1>
-{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
-<form method="post" action="/login"><label>Jelszó<input type="password" name="password"
-autocomplete="current-password" required autofocus></label><button type="submit">Belépés</button></form>
-</main></body></html>
-{{end}}
+<!doctype html><html lang="hu"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Monitorozo · Bejelentkezés</title><link rel="stylesheet" href="/static/style.css"></head><body class="login"><main class="login-panel"><a class="brand" href="/"><img src="/static/icons/activity.svg" width="38" height="38" alt="">Monitorozo</a><p class="eyebrow">SZERVERFELÜGYELET</p><h1>Üdv újra.</h1><p class="muted">Jelentkezz be a szerverek állapotához.</p>{{if .Error}}<p class="notice critical" role="alert">{{.Error}}</p>{{end}}<form method="post" action="/login"><label class="field" for="password">Jelszó</label><input id="password" type="password" name="password" autocomplete="current-password" required autofocus><button type="submit">Belépés</button></form></main></body></html>{{end}}
