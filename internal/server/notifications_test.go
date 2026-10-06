@@ -193,7 +193,10 @@ func TestNotificationDeliveryFiltersAndRetries(t *testing.T) {
 
 func TestDashboardPathsGrowthStaleDataAndMissingAgents(t *testing.T) {
 	app, _, cookie, _ := notificationServer(t)
-	report := model.Report{AgentID: "node@01", Hostname: "production", Sequence: 1, Timestamp: time.Now().Add(-10 * time.Minute), Filesystems: []model.Filesystem{{Mountpoint: "/var/lib/data", Device: "/dev/nvme1n1", TotalBytes: 100000, UsedBytes: 96000, UsedPercent: 96, AvailBytes: 4000}}}
+	report := model.Report{AgentID: "node@01", Hostname: "production", Sequence: 1, Timestamp: time.Now().Add(-10 * time.Minute), Filesystems: []model.Filesystem{
+		{Mountpoint: "/var/lib/data", Device: "/dev/nvme1n1", FSType: "ext4", TotalBytes: 100000, UsedBytes: 96000, UsedPercent: 96, AvailBytes: 4000},
+		{Mountpoint: "/snap/core22/2955", Device: "/dev/loop0", FSType: "squashfs", TotalBytes: 100, UsedBytes: 100, UsedPercent: 100},
+	}}
 	if err := app.store.SaveReport(context.Background(), report); err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +218,9 @@ func TestDashboardPathsGrowthStaleDataAndMissingAgents(t *testing.T) {
 			if response.Code != 200 || !strings.Contains(html.UnescapeString(response.Body.String()), want) {
 				t.Fatalf("%s missing %q: %d %s", path, want, response.Code, response.Body.String())
 			}
+		}
+		if strings.Contains(response.Body.String(), "/snap/core22/2955") {
+			t.Fatalf("%s displayed read-only squashfs package image", path)
 		}
 	}
 	request := httptest.NewRequest("GET", "/api/v1/history?agent_id=node%4001&range=24h", nil)

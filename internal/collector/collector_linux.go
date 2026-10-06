@@ -285,6 +285,9 @@ func (c *Collector) statTarget(mountpoint string) (string, bool) {
 }
 
 func (c *Collector) includeFilesystem(fsType string) bool {
+	if !(model.Filesystem{FSType: fsType}).Monitorable() {
+		return false
+	}
 	if len(c.fsTypes) > 0 {
 		return c.fsTypes[fsType]
 	}

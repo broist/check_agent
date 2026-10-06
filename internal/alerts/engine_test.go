@@ -90,8 +90,11 @@ func TestDiskSeverityAndOfflineRule(t *testing.T) {
 	now := time.Now().UTC()
 	report := model.Report{
 		AgentID: "node-01", Timestamp: now, Sequence: 1,
-		Memory:      model.Memory{UsedPercent: 20},
-		Filesystems: []model.Filesystem{{Mountpoint: "/", UsedPercent: 97}},
+		Memory: model.Memory{UsedPercent: 20},
+		Filesystems: []model.Filesystem{
+			{Mountpoint: "/", FSType: "ext4", UsedPercent: 97},
+			{Mountpoint: "/snap/core22/2955", FSType: "squashfs", UsedPercent: 100},
+		},
 	}
 	if err := store.SaveReport(ctx, report); err != nil {
 		t.Fatal(err)

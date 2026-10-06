@@ -52,6 +52,9 @@ func (e *Engine) EvaluateReport(ctx context.Context, report model.Report, now ti
 	httpResources := make(map[string]model.HTTPStatus)
 	serviceResources := make(map[string]model.ServiceStatus)
 	for _, filesystem := range report.Filesystems {
+		if !filesystem.Monitorable() {
+			continue
+		}
 		rules = append(rules,
 			storage.RuleEvaluation{
 				AgentID: report.AgentID, RuleKey: "disk_warning",

@@ -61,6 +61,13 @@ type Filesystem struct {
 	UsedPercent float64 `json:"used_percent"`
 }
 
+// Monitorable reports whether capacity reflects writable host storage.
+// SquashFS mounts are immutable package images (for example Snap revisions):
+// they are always 100% used and cannot run out of writable space.
+func (f Filesystem) Monitorable() bool {
+	return f.FSType != "squashfs"
+}
+
 type DiskIO struct {
 	Device              string  `json:"device"`
 	ReadBytes           uint64  `json:"read_bytes"`

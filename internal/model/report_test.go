@@ -41,6 +41,15 @@ func TestHTTPStatusTLSDays(t *testing.T) {
 	}
 }
 
+func TestFilesystemMonitorable(t *testing.T) {
+	if !(Filesystem{FSType: "ext4"}).Monitorable() {
+		t.Fatal("writable ext4 filesystem excluded")
+	}
+	if (Filesystem{FSType: "squashfs"}).Monitorable() {
+		t.Fatal("read-only squashfs package image included")
+	}
+}
+
 func TestReportValidateAllowsBoundedBufferedAge(t *testing.T) {
 	now := time.Now().UTC()
 	report := Report{

@@ -86,6 +86,9 @@ func (s *Server) dashboardView(ctx context.Context, reports []model.Report, acti
 			return data, err
 		}
 		for _, fs := range report.Filesystems {
+			if !fs.Monitorable() {
+				continue
+			}
 			item := filesystemView{Filesystem: fs, Level: "ok", Change: "Nincs összehasonlítható korábbi mérés"}
 			if fs.UsedPercent > s.cfg.DiskCriticalThreshold {
 				item.Level = "critical"
