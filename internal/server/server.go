@@ -351,6 +351,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := s.dashboardView(ctx, reports, alerts)
 	if err != nil {
+		s.logger.Error("build dashboard view failed", "error", err)
 		http.Error(w, "Az állapot nem tölthető be.", http.StatusInternalServerError)
 		return
 	}

@@ -17,6 +17,9 @@ type NotificationPreferences struct {
 	Recovery  bool   `json:"recovery"`
 }
 
+const previousReportQuery = `SELECT payload_json FROM reports WHERE agent_id=?
+        AND measured_at<? ORDER BY measured_at DESC, id DESC LIMIT 1`
+
 func (s *Store) NotificationPreferences(ctx context.Context, defaults NotificationPreferences) (NotificationPreferences, error) {
 	var p NotificationPreferences
 	err := s.db.QueryRowContext(ctx, "SELECT enabled, recipient, warnings, recovery FROM notification_preferences WHERE id=1").Scan(&p.Enabled, &p.Recipient, &p.Warnings, &p.Recovery)
@@ -37,8 +40,10 @@ func (s *Store) SaveNotificationPreferences(ctx context.Context, p NotificationP
 // Compare measurements, not receipt times: a queued report may arrive much later.
 func (s *Store) PreviousReport(ctx context.Context, agent string, before time.Time) (model.Report, error) {
 	var payload []byte
-	err := s.db.QueryRowContext(ctx, `SELECT payload_json FROM reports WHERE agent_id=?
-        AND julianday(measured_at)<julianday(?) ORDER BY julianday(measured_at) DESC, id DESC LIMIT 1`, agent, before.UTC().Format(time.RFC3339Nano)).Scan(&payload)
+	// UTC RFC3339Nano timestamps sort chronologically as text. Keeping the column
+	// unwrapped lets SQLite use idx_reports_agent_time on production-sized data.
+	err := s.db.QueryRowContext(ctx, previousReportQuery,
+		agent, before.UTC().Format(time.RFC3339Nano)).Scan(&payload)
 	if err != nil {
 		return model.Report{}, err
 	}
