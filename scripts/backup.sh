@@ -27,7 +27,9 @@ umask 077
 install -d -o root -g root -m 0700 "$destination"
 database="/var/lib/monitorozo-server/monitorozo.db"
 if [ -f "$database" ]; then
-  sqlite3 "$database" ".timeout 5000" ".backup '$destination/monitorozo.db'"
+  # VACUUM INTO: one read transaction, a consistent snapshot even while the
+  # server keeps writing (.backup restarts on every write and may never finish).
+  sqlite3 "$database" ".timeout 5000" "VACUUM INTO '$destination/monitorozo.db'"
   sqlite3 "$destination/monitorozo.db" "PRAGMA integrity_check;" >"$destination/integrity.txt"
 fi
 set --

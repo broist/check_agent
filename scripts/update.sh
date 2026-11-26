@@ -60,7 +60,9 @@ tar -C / -czf "$backup/config.tar.gz" etc/monitorozo
 database="/var/lib/monitorozo-server/monitorozo.db"
 database_saved=false
 if [ "$has_server" = true ] && [ -f "$database" ]; then
-  sqlite3 "$database" ".timeout 5000" ".backup '$backup/monitorozo.db'"
+  # VACUUM INTO: one read transaction, a consistent snapshot even while the
+  # server keeps writing (.backup restarts on every write and may never finish).
+  sqlite3 "$database" ".timeout 5000" "VACUUM INTO '$backup/monitorozo.db'"
   database_saved=true
 fi
 
