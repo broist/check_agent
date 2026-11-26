@@ -48,6 +48,18 @@ func Describe(a storage.Alert) Description {
 		return Description{"A webes végpont ellenőrzése sikertelen", fmt.Sprintf("Ellenőrzés: %s · HTTP-kód: %.0f (0: nem érkezett válasz)", a.Target, a.Value), "Ellenőrizd az érintett URL elérhetőségét a szerverről, az alkalmazás és a reverse proxy naplóit, valamint a DNS- és TLS-beállításokat."}
 	case "tls_expiring":
 		return Description{"A TLS-tanúsítvány hamarosan lejár", fmt.Sprintf("Hátralévő idő: %.1f nap · figyelmeztetési határ: %.1f nap", a.Value, a.Threshold), "Újítsd meg az érintett végpont tanúsítványát. Ellenőrizd az automatikus megújítás naplóját, majd a kiszolgált tanúsítvány lejárati dátumát."}
+	case "security_updates_pending":
+		return Description{"Biztonsági frissítések várnak telepítésre", fmt.Sprintf("Függő biztonsági frissítés: %.0f csomag · a türelmi idő (security_update_grace) letelt", a.Value), "A szerveren nézd meg a listát: apt list --upgradable, majd telepítsd: sudo apt-get update && sudo apt-get upgrade. Ha az unattended-upgrades be van kapcsolva, ellenőrizd a naplóját a /var/log/unattended-upgrades/ mappában, mert valami megakasztja az automatikus telepítést."}
+	case "reboot_required":
+		return Description{"Újraindítás szükséges", "A /run/reboot-required jelzés a türelmi időnél (reboot_required_grace) régebb óta fennáll.", "A telepített frissítések (például kernel vagy libc) csak újraindítás után lépnek életbe. Az érintett csomagok: cat /run/reboot-required.pkgs. Karbantartási ablakban indítsd újra a szervert: sudo reboot, majd ellenőrizd, hogy a szolgáltatások és konténerek elindultak."}
+	case "vulnerability_critical":
+		return Description{"Javítható kritikus sérülékenység a konténerképben", fmt.Sprintf("Kép: %s · javítható kritikus CVE: %.0f", a.Resource, a.Value), "Frissítsd a képet (docker pull az újabb címkére) vagy saját képnél az alapképet (Dockerfile FROM sora), építsd újra, majd telepítsd újra a konténert. A részletes lista: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro aquasec/trivy:0.65.0 image --scanners vuln --severity CRITICAL --ignore-unfixed " + a.Resource}
+	case "vulnerability_scan_stale":
+		measurement := fmt.Sprintf("Utolsó CVE-vizsgálat óta: %.0f óra · határ: %.0f óra", a.Value, a.Threshold)
+		if a.Value < 0 {
+			measurement = fmt.Sprintf("Még nem készült CVE-vizsgálat · határ: %.0f óra", a.Threshold)
+		}
+		return Description{"Elavult vagy hiányzó CVE-vizsgálat", measurement, "Ellenőrizd az ütemezést és az utolsó futást: systemctl status monitorozo-cvescan.timer, journalctl -u monitorozo-cvescan -n 100. Kézi futtatás: sudo systemctl start monitorozo-cvescan.service. Ha a timer nincs engedélyezve: sudo systemctl enable --now monitorozo-cvescan.timer."}
 	case "test_email":
 		return Description{"Tesztértesítés", "Az SMTP-kiszolgáló elfogadta a tesztüzenetet.", "Nincs szükség beavatkozásra. Ez a Monitorozo email-beállításainak tesztje."}
 	default:

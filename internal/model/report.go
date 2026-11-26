@@ -19,26 +19,28 @@ const (
 )
 
 type Report struct {
-	AgentID     string          `json:"agent_id"`
-	Timestamp   time.Time       `json:"timestamp"`
-	Sequence    uint64          `json:"sequence"`
-	Version     string          `json:"version"`
-	Hostname    string          `json:"hostname"`
-	CPUPercent  float64         `json:"cpu_percent"`
-	Load1       float64         `json:"load_1"`
-	Load5       float64         `json:"load_5"`
-	Load15      float64         `json:"load_15"`
-	Memory      Memory          `json:"memory"`
-	Filesystems []Filesystem    `json:"filesystems"`
-	DiskIO      []DiskIO        `json:"disk_io"`
-	Networks    []NetworkIO     `json:"networks"`
-	Services    []ServiceStatus `json:"services,omitempty"`
-	Docker      DockerStatus    `json:"docker,omitempty"`
-	HTTPChecks  []HTTPStatus    `json:"http_checks,omitempty"`
-	TCPChecks   []TCPStatus     `json:"tcp_checks,omitempty"`
-	Uptime      uint64          `json:"uptime_seconds"`
-	BootTime    time.Time       `json:"boot_time"`
-	Kernel      string          `json:"kernel"`
+	AgentID         string               `json:"agent_id"`
+	Timestamp       time.Time            `json:"timestamp"`
+	Sequence        uint64               `json:"sequence"`
+	Version         string               `json:"version"`
+	Hostname        string               `json:"hostname"`
+	CPUPercent      float64              `json:"cpu_percent"`
+	Load1           float64              `json:"load_1"`
+	Load5           float64              `json:"load_5"`
+	Load15          float64              `json:"load_15"`
+	Memory          Memory               `json:"memory"`
+	Filesystems     []Filesystem         `json:"filesystems"`
+	DiskIO          []DiskIO             `json:"disk_io"`
+	Networks        []NetworkIO          `json:"networks"`
+	Services        []ServiceStatus      `json:"services,omitempty"`
+	Docker          DockerStatus         `json:"docker,omitempty"`
+	HTTPChecks      []HTTPStatus         `json:"http_checks,omitempty"`
+	TCPChecks       []TCPStatus          `json:"tcp_checks,omitempty"`
+	Uptime          uint64               `json:"uptime_seconds"`
+	BootTime        time.Time            `json:"boot_time"`
+	Kernel          string               `json:"kernel"`
+	Packages        *PackageStatus       `json:"packages,omitempty"`
+	Vulnerabilities *VulnerabilityStatus `json:"vulnerabilities,omitempty"`
 }
 
 type Memory struct {
@@ -236,6 +238,16 @@ func (r Report) Validate(now time.Time, maxFutureSkew, maxAge time.Duration) err
 		}
 		if _, _, err := net.SplitHostPort(check.Address); err != nil {
 			return errors.New("invalid TCP check address")
+		}
+	}
+	if r.Packages != nil {
+		if err := r.Packages.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.Vulnerabilities != nil {
+		if err := r.Vulnerabilities.Validate(); err != nil {
+			return err
 		}
 	}
 	return nil

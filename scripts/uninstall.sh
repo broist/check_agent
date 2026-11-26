@@ -17,6 +17,10 @@ if [ "$component" = agent ] || [ "$component" = all ]; then
   systemctl disable --now monitorozo-agent 2>/dev/null || true
   rm -f /etc/systemd/system/monitorozo-agent.service
   rm -f /usr/local/bin/monitorozo-agent
+  systemctl disable --now monitorozo-cvescan.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/monitorozo-cvescan.service \
+    /etc/systemd/system/monitorozo-cvescan.timer \
+    /usr/local/sbin/monitorozo-cvescan
 fi
 if [ "$component" = server ] || [ "$component" = all ]; then
   systemctl disable --now monitorozo-server 2>/dev/null || true

@@ -195,6 +195,17 @@ certificates with at most 14 days remaining also fire alerts.
 `server.yaml`; `http_failure_count`, `tls_warning_days` and
 `tls_critical_days` tune the probe rules. Restart the server after changes.
 
+Security rules (all configurable in `server.yaml`): `security_updates_pending`
+(warning) fires when security updates have been pending for
+`security_update_grace` (default 72h); `reboot_required` (warning) after
+`reboot_required_grace` (default 168h); `vulnerability_critical` (critical, per
+image) as soon as a scanned image has a fixable CRITICAL CVE;
+`vulnerability_scan_stale` (warning) when no scan exists or the last one is
+older than `vulnerability_scan_max_age` (default 48h). A failed `apt-check` run
+or a failed image scan keeps existing alerts unchanged; they resolve only when
+the condition clears, the image stops running, or the agent stops reporting the
+section.
+
 ## Optional agent checks
 
 Configure only the checks needed on the production host. Every HTTP/TCP/Docker
@@ -225,6 +236,47 @@ Docker socket access is different: membership in the `docker` group normally
 grants root-equivalent control. Prefer leaving Docker checks disabled or
 placing a separately maintained, read-only authorization proxy in front of the
 daemon; never expose the unauthenticated Docker API over TCP.
+
+### Package updates and container CVE scan
+
+```yaml
+packages:
+  enabled: true                       # opt-in; default false
+  interval: 1h                        # 5m..168h
+  command: /usr/lib/update-notifier/apt-check
+vulnerability_report:
+  path: /var/lib/monitorozo-cvescan/summary.json   # empty = disabled
+```
+
+The agent runs `apt-check` in a background goroutine (60 s timeout) and parses
+`UPGRADABLE;SECURITY` from stderr or stdout; the 10 s report loop only reads the
+cached result plus `/run/reboot-required[.pkgs]`. `apt-check` loads the APT
+cache in Python, which is why the agent unit allows `MemoryMax=192M`.
+
+Container images are scanned by a separate root oneshot,
+`monitorozo-cvescan.service` (`/usr/local/sbin/monitorozo-cvescan`, from
+`scripts/cvescan.sh`), triggered daily by `monitorozo-cvescan.timer` (04:30,
+`RandomizedDelaySec=30m`, `Persistent=true`). `scripts/install.sh agent`
+installs both units but does not enable the timer:
+
+```bash
+sudo systemctl start monitorozo-cvescan.service   # first run
+sudo systemctl enable --now monitorozo-cvescan.timer
+journalctl -u monitorozo-cvescan -n 100 --no-pager
+```
+
+The script updates the Trivy DB once, then scans each unique image of
+`docker ps` with `aquasec/trivy:0.65.0` (`--cpus 1 --memory 1200m`, read-only
+Docker socket, cache in `/var/cache/monitorozo-cvescan`, `--skip-db-update`),
+and writes `/var/lib/monitorozo-cvescan/summary.json` via:
+
+```bash
+monitorozo-agent trivy-summary -out FILE [-scanner "trivy 0.65.0"] [-error MSG] IMAGE=TRIVY.json...
+```
+
+A failed image scan marks only that image. Override `CVESCAN_MEMORY`,
+`CVESCAN_OUT`, `TRIVY_IMAGE` or `CVESCAN_CACHE` in `/etc/monitorozo/cvescan.env`.
+The agent itself never gets Docker socket access.
 
 ## Inspect services
 

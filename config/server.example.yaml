@@ -21,6 +21,10 @@ trusted_proxy: 127.0.0.0/8
 raw_retention: 168h
 aggregate_retention: 2160h
 maintenance_interval: 1h
+# Security section alerts: pending security updates / reboot and CVE scan age.
+security_update_grace: 72h
+reboot_required_grace: 168h
+vulnerability_scan_max_age: 48h
 
 # Generate with: monitorozo-server hash-token RANDOM_TOKEN
 agent_tokens:

@@ -50,6 +50,17 @@ if [ "$component" = agent ] || [ "$component" = all ]; then
     /usr/local/bin/monitorozo-agent
   install -o root -g root -m 0644 deploy/systemd/monitorozo-agent.service \
     /etc/systemd/system/monitorozo-agent.service
+  # Optional daily container CVE scan (root, Trivy in Docker). The timer is
+  # installed but not enabled; see docs/TELEPITES_HU.md.
+  install -o root -g root -m 0755 scripts/cvescan.sh \
+    /usr/local/sbin/monitorozo-cvescan
+  install -o root -g root -m 0644 deploy/systemd/monitorozo-cvescan.service \
+    /etc/systemd/system/monitorozo-cvescan.service
+  install -o root -g root -m 0644 deploy/systemd/monitorozo-cvescan.timer \
+    /etc/systemd/system/monitorozo-cvescan.timer
 fi
 systemctl daemon-reload
 echo "Installed component: $component. Install its protected configuration, then enable the service."
+if [ "$component" = agent ] || [ "$component" = all ]; then
+  echo "Optional CVE scan (needs Docker): systemctl enable --now monitorozo-cvescan.timer"
+fi

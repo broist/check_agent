@@ -26,6 +26,9 @@ func New(store *storage.Store, cfg config.Server) *Engine {
 	if cfg.TLSCriticalDays == 0 {
 		cfg.TLSCriticalDays = 3
 	}
+	if cfg.VulnerabilityScanMaxAge == 0 {
+		cfg.VulnerabilityScanMaxAge = 48 * time.Hour
+	}
 	return &Engine{store: store, cfg: cfg}
 }
 
@@ -121,6 +124,7 @@ func (e *Engine) EvaluateReport(ctx context.Context, report model.Report, now ti
 			})
 		}
 	}
+	rules = append(rules, e.securityRules(report, now)...)
 	for _, rule := range rules {
 		seen[ruleKey(rule.RuleKey, rule.Resource)] = true
 		if _, err := e.store.ApplyRule(ctx, rule, now); err != nil {
@@ -159,6 +163,17 @@ func (e *Engine) resolveMissing(
 		case "tls_expiring":
 			check, exists := httpResources[alert.Resource]
 			resolve = !exists || strings.HasPrefix(check.URL, "http://")
+		case "security_updates_pending", "reboot_required":
+			// A failed apt-check keeps the alert (and its grace timer) as is;
+			// it resolves only when package reporting is switched off.
+			resolve = report.Packages == nil
+		case "vulnerability_scan_stale":
+			resolve = report.Vulnerabilities == nil
+		case "vulnerability_critical":
+			// An image whose scan failed keeps its last state; an image that
+			// is no longer running (or a disabled report) resolves.
+			resolve = report.Vulnerabilities == nil ||
+				!scannedImage(report.Vulnerabilities, alert.Resource)
 		}
 		if !resolve {
 			continue
@@ -203,6 +218,64 @@ func (e *Engine) ResolveOnline(ctx context.Context, agentID string, now time.Tim
 		Value: 0, Threshold: e.cfg.AgentOfflineAfter.Seconds(), Violated: false,
 	}, now)
 	return err
+}
+
+// securityRules evaluates the package-update and container CVE sections.
+// Sections missing from the report produce no rules (see resolveMissing).
+func (e *Engine) securityRules(report model.Report, now time.Time) []storage.RuleEvaluation {
+	var rules []storage.RuleEvaluation
+	if packages := report.Packages; packages != nil {
+		if packages.Error == "" {
+			rules = append(rules, storage.RuleEvaluation{
+				AgentID: report.AgentID, RuleKey: "security_updates_pending", Severity: "warning",
+				Value: float64(packages.Security), Threshold: 0,
+				Violated: packages.Security > 0, For: e.cfg.SecurityUpdateGrace,
+			})
+		}
+		rules = append(rules, storage.RuleEvaluation{
+			AgentID: report.AgentID, RuleKey: "reboot_required", Severity: "warning",
+			Value: boolValue(packages.RebootRequired), Threshold: 1,
+			Violated: packages.RebootRequired, For: e.cfg.RebootRequiredGrace,
+		})
+	}
+	vulnerabilities := report.Vulnerabilities
+	if vulnerabilities == nil {
+		return rules
+	}
+	for _, image := range vulnerabilities.Images {
+		if image.Error != "" {
+			continue
+		}
+		rules = append(rules, storage.RuleEvaluation{
+			AgentID: report.AgentID, RuleKey: "vulnerability_critical",
+			Resource: image.Image, Severity: "critical",
+			Value: float64(image.FixableCritical), Threshold: 0,
+			Violated: image.FixableCritical > 0,
+		})
+	}
+	maxAge := e.cfg.VulnerabilityScanMaxAge
+	age := -1.0 // never scanned
+	if !vulnerabilities.ScannedAt.IsZero() {
+		age = now.Sub(vulnerabilities.ScannedAt).Hours()
+		if age < 0 {
+			age = 0
+		}
+	}
+	rules = append(rules, storage.RuleEvaluation{
+		AgentID: report.AgentID, RuleKey: "vulnerability_scan_stale", Severity: "warning",
+		Value: age, Threshold: maxAge.Hours(),
+		Violated: age < 0 || age > maxAge.Hours(),
+	})
+	return rules
+}
+
+func scannedImage(status *model.VulnerabilityStatus, image string) bool {
+	for _, item := range status.Images {
+		if item.Image == image {
+			return true
+		}
+	}
+	return false
 }
 
 func boolValue(value bool) float64 {

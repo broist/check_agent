@@ -36,12 +36,33 @@ type Agent struct {
 	Docker          DockerChecks  `yaml:"docker"`
 	HTTPChecks      []HTTPCheck   `yaml:"http_checks"`
 	TCPChecks       []TCPCheck    `yaml:"tcp_checks"`
+	// Packages and VulnerabilityReport feed the dashboard "Biztonság" section.
+	Packages            PackageChecks       `yaml:"packages"`
+	VulnerabilityReport VulnerabilityReport `yaml:"vulnerability_report"`
 }
+
+const (
+	DefaultPackageInterval = time.Hour
+	DefaultPackageCommand  = "/usr/lib/update-notifier/apt-check"
+)
 
 type DockerChecks struct {
 	Enabled bool          `yaml:"enabled"`
 	Socket  string        `yaml:"socket"`
 	Timeout time.Duration `yaml:"timeout"`
+}
+
+// PackageChecks runs the apt-check helper in the background (opt-in).
+type PackageChecks struct {
+	Enabled  bool          `yaml:"enabled"`
+	Interval time.Duration `yaml:"interval"`
+	Command  string        `yaml:"command"`
+}
+
+// VulnerabilityReport points to the summary written by monitorozo-cvescan.
+// An empty path disables CVE reporting.
+type VulnerabilityReport struct {
+	Path string `yaml:"path"`
 }
 
 type HTTPCheck struct {
@@ -83,6 +104,10 @@ type Server struct {
 	AggregateRetention    time.Duration `yaml:"aggregate_retention"`
 	MaintenanceInterval   time.Duration `yaml:"maintenance_interval"`
 	SMTP                  SMTP          `yaml:"smtp"`
+	// Security section alert timing.
+	SecurityUpdateGrace     time.Duration `yaml:"security_update_grace"`
+	RebootRequiredGrace     time.Duration `yaml:"reboot_required_grace"`
+	VulnerabilityScanMaxAge time.Duration `yaml:"vulnerability_scan_max_age"`
 }
 
 type AgentToken struct {
@@ -113,6 +138,10 @@ func LoadAgent(path string) (Agent, error) {
 		Docker: DockerChecks{
 			Socket:  "/var/run/docker.sock",
 			Timeout: 3 * time.Second,
+		},
+		Packages: PackageChecks{
+			Interval: DefaultPackageInterval,
+			Command:  DefaultPackageCommand,
 		},
 	}
 	if err := loadYAML(path, &cfg); err != nil {
@@ -228,31 +257,59 @@ func LoadAgent(path string) (Agent, error) {
 			return cfg, err
 		}
 	}
+	if err := validateSecurityChecks(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+func validateSecurityChecks(cfg *Agent) error {
+	if cfg.Packages.Interval == 0 {
+		cfg.Packages.Interval = DefaultPackageInterval
+	}
+	if strings.TrimSpace(cfg.Packages.Command) == "" {
+		cfg.Packages.Command = DefaultPackageCommand
+	}
+	if cfg.Packages.Enabled {
+		if cfg.Packages.Interval < 5*time.Minute || cfg.Packages.Interval > 7*24*time.Hour {
+			return errors.New("packages.interval must be between 5m and 168h")
+		}
+		fields := strings.Fields(cfg.Packages.Command)
+		if len(fields) == 0 || !pathpkg.IsAbs(fields[0]) {
+			return errors.New("packages.command must start with an absolute executable path")
+		}
+	}
+	if cfg.VulnerabilityReport.Path != "" && !pathpkg.IsAbs(cfg.VulnerabilityReport.Path) {
+		return errors.New("vulnerability_report.path must be absolute")
+	}
+	return nil
 }
 
 func LoadServer(path string) (Server, error) {
 	cfg := Server{
-		Listen:                "127.0.0.1:8080",
-		DatabasePath:          "/var/lib/monitorozo-server/monitorozo.db",
-		SessionIdleTimeout:    30 * time.Minute,
-		SessionMaxLifetime:    12 * time.Hour,
-		SecureCookies:         true,
-		MaxClockSkew:          2 * time.Minute,
-		MaxReportAge:          24 * time.Hour,
-		CPUAlertThreshold:     90,
-		MemoryAlertThreshold:  90,
-		HighUsageDuration:     5 * time.Minute,
-		DiskWarningThreshold:  85,
-		DiskCriticalThreshold: 95,
-		AgentOfflineAfter:     120 * time.Second,
-		AlertCooldown:         30 * time.Minute,
-		HTTPFailureCount:      3,
-		TLSWarningDays:        14,
-		TLSCriticalDays:       3,
-		RawRetention:          7 * 24 * time.Hour,
-		AggregateRetention:    90 * 24 * time.Hour,
-		MaintenanceInterval:   time.Hour,
+		Listen:                  "127.0.0.1:8080",
+		DatabasePath:            "/var/lib/monitorozo-server/monitorozo.db",
+		SessionIdleTimeout:      30 * time.Minute,
+		SessionMaxLifetime:      12 * time.Hour,
+		SecureCookies:           true,
+		MaxClockSkew:            2 * time.Minute,
+		MaxReportAge:            24 * time.Hour,
+		CPUAlertThreshold:       90,
+		MemoryAlertThreshold:    90,
+		HighUsageDuration:       5 * time.Minute,
+		DiskWarningThreshold:    85,
+		DiskCriticalThreshold:   95,
+		AgentOfflineAfter:       120 * time.Second,
+		AlertCooldown:           30 * time.Minute,
+		HTTPFailureCount:        3,
+		TLSWarningDays:          14,
+		TLSCriticalDays:         3,
+		RawRetention:            7 * 24 * time.Hour,
+		AggregateRetention:      90 * 24 * time.Hour,
+		MaintenanceInterval:     time.Hour,
+		SecurityUpdateGrace:     72 * time.Hour,
+		RebootRequiredGrace:     168 * time.Hour,
+		VulnerabilityScanMaxAge: 48 * time.Hour,
 	}
 	if err := loadYAML(path, &cfg); err != nil {
 		return cfg, err
@@ -334,6 +391,13 @@ func LoadServer(path string) (Server, error) {
 	}
 	if cfg.MaintenanceInterval < 5*time.Minute {
 		return cfg, errors.New("maintenance_interval must be at least 5m")
+	}
+	if cfg.SecurityUpdateGrace < 0 || cfg.SecurityUpdateGrace > 90*24*time.Hour ||
+		cfg.RebootRequiredGrace < 0 || cfg.RebootRequiredGrace > 90*24*time.Hour {
+		return cfg, errors.New("security_update_grace and reboot_required_grace must be between 0 and 2160h")
+	}
+	if cfg.VulnerabilityScanMaxAge < time.Hour || cfg.VulnerabilityScanMaxAge > 90*24*time.Hour {
+		return cfg, errors.New("vulnerability_scan_max_age must be between 1h and 2160h")
 	}
 	if err := validateSMTP(cfg.SMTP); err != nil {
 		return cfg, err

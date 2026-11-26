@@ -94,6 +94,11 @@ agent_tokens:
 
 admin_password_hash: "$2a$..."
 session_secret: "legalabb-32-karakteres-secret"
+
+# Biztonság rész riasztásai (alapértékek):
+security_update_grace: 72h       # ennyi ideig függő biztonsági frissítés után riaszt
+reboot_required_grace: 168h      # ennyi ideig függő újraindítás után riaszt
+vulnerability_scan_max_age: 48h  # ennél régebbi CVE-vizsgálat elavultnak számít
 ```
 
 Jogosultság:
@@ -192,7 +197,19 @@ docker:
   enabled: false
 http_checks: []
 tcp_checks: []
+packages:
+  enabled: true
+  interval: 1h
+  command: /usr/lib/update-notifier/apt-check
+vulnerability_report:
+  path: /var/lib/monitorozo-cvescan/summary.json
 ```
+
+A `packages` rész óránként, a háttérben futtatja az `apt-check` parancsot
+(Ubuntun az `update-notifier-common` csomag része; Debianon telepítsd, vagy hagyd
+kikapcsolva). Az újraindítási igényt a `/run/reboot-required` fájlból olvassa.
+A `vulnerability_report.path` a lenti CVE-szkenner összesítőjére mutat; üresen
+hagyva a CVE-rész kikapcsol.
 
 Token env fájl:
 
@@ -209,6 +226,56 @@ sudo systemctl enable --now monitorozo-agent
 sudo systemctl status monitorozo-agent --no-pager
 sudo journalctl -u monitorozo-agent --since "5 minutes ago" --no-pager
 ```
+
+### 5.1 CVE-szkenner (opcionális, Dockeres gépen)
+
+A konténerképek sérülékenységeit naponta egy külön, root alatt futó egység
+vizsgálja: a futó konténerek képeit a rögzített verziójú
+`aquasec/trivy:0.65.0` konténerrel nézi át, majd a
+`monitorozo-agent trivy-summary` alparancs kis összesítőt ír a
+`/var/lib/monitorozo-cvescan/summary.json` fájlba (mappa 0755, fájl 0644). Az
+agent csak ezt a fájlt olvassa; a Docker sockethez továbbra sem fér hozzá.
+
+A `scripts/install.sh agent` telepíti a szkriptet
+(`/usr/local/sbin/monitorozo-cvescan`) és a
+`monitorozo-cvescan.service` / `.timer` egységeket, de az időzítőt **nem**
+engedélyezi. Első futtatás kézzel, majd az időzítő bekapcsolása:
+
+```bash
+sudo systemctl start monitorozo-cvescan.service
+sudo journalctl -u monitorozo-cvescan -n 100 --no-pager
+sudo cat /var/lib/monitorozo-cvescan/summary.json
+sudo systemctl enable --now monitorozo-cvescan.timer
+systemctl list-timers monitorozo-cvescan.timer
+```
+
+Az időzítő minden nap 04:30-kor indul (legfeljebb 30 perc véletlen
+késleltetéssel; ha a gép akkor ki volt kapcsolva, indítás után pótolja). Az
+első futás letölti a Trivy-adatbázist (néhány száz MB a
+`/var/cache/monitorozo-cvescan` mappába), a későbbiek ezt frissítik.
+
+Erőforrások: a Trivy-konténer legfeljebb 1 CPU-t és 1200 MB memóriát kap, a
+szolgáltatás `Nice=19` és `IOSchedulingClass=idle` prioritással fut, így a
+production terhelést nem szorítja ki. Kis memóriájú gépen (például 1–2 GB RAM)
+csökkentsd a korlátot, vagy nagy képeknél növeld:
+
+```bash
+sudo sh -c 'printf "%s\n" "CVESCAN_MEMORY=800m" > /etc/monitorozo/cvescan.env'
+```
+
+További beállítható környezeti változók ugyanebben a fájlban:
+`CVESCAN_OUT` (összesítő helye, ekkor az agent `vulnerability_report.path`
+értékét is írd át), `TRIVY_IMAGE` (más Trivy-verzió), `CVESCAN_CACHE`.
+
+Az agent alapból nem riaszt elavult vizsgálatra, amíg a
+`vulnerability_report.path` üres. Ha beállítottad, de a szkenner még nem futott,
+a felületen „CVE-vizsgálat elavult” figyelmeztetés jelenik meg — az első kézi
+futtatás után megszűnik.
+
+Megjegyzés: az agent egység memóriakorlátja (`MemoryMax=192M`) az `apt-check`
+miatt nőtt; meglévő telepítésnél a `sudo ./scripts/install.sh agent` újra
+lefuttatása frissíti az egységfájlt, utána `sudo systemctl restart
+monitorozo-agent`.
 
 ## 6. Frissítés
 

@@ -39,8 +39,10 @@ RemoveIPC=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/monitorozo-agent
 LimitNOFILE=1024
-MemoryHigh=48M
-MemoryMax=64M
+# apt-check (packages.enabled) loads the APT cache in Python for a few
+# seconds per hour; the headroom keeps it below the hard limit.
+MemoryHigh=128M
+MemoryMax=192M
 UMask=0027
 
 [Install]

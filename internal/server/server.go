@@ -98,6 +98,7 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 		"rule":           labelRule,
 		"serviceState":   labelServiceState,
 		"containerState": labelContainerState,
+		"join":           func(values []string) string { return strings.Join(values, ", ") },
 	}
 	templates, err := template.New("pages").Funcs(funcs).ParseFS(web.Files, "*.html")
 	if err != nil {
@@ -197,6 +198,14 @@ func labelRule(value string) string {
 		return "HTTP ellenőrzés sikertelen"
 	case "tls_expiring":
 		return "TLS tanúsítvány lejár"
+	case "security_updates_pending":
+		return "biztonsági frissítés függőben"
+	case "reboot_required":
+		return "újraindítás szükséges"
+	case "vulnerability_critical":
+		return "javítható kritikus CVE a konténerképben"
+	case "vulnerability_scan_stale":
+		return "CVE-vizsgálat elavult"
 	default:
 		return value
 	}

@@ -19,6 +19,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "trivy-summary" {
+		os.Exit(runTrivySummary(os.Args[2:], os.Stderr))
+	}
 	configPath := flag.String("config", "/etc/monitorozo/agent.yaml", "configuration file")
 	showVersion := flag.Bool("version", false, "print version information")
 	flag.Parse()
@@ -47,6 +50,7 @@ func main() {
 		os.Exit(1)
 	}
 	runtimeChecks := checks.New(cfg)
+	security := checks.NewSecurity(cfg)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	spool, err := agent.NewSpool(cfg.SpoolDirectory, cfg.QueueSize)
@@ -64,6 +68,15 @@ func main() {
 		})
 	}()
 
+	// Package checks run on their own (hourly) schedule so a slow apt-check
+	// never delays the regular report cycle.
+	var securityWait sync.WaitGroup
+	securityWait.Add(1)
+	go func() {
+		defer securityWait.Done()
+		security.Run(ctx)
+	}()
+
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 	logger.Info("agent started", "agent_id", cfg.AgentID, "interval", cfg.Interval)
@@ -76,6 +89,8 @@ func main() {
 		report.AgentID = cfg.AgentID
 		report.Services, report.Docker, report.HTTPChecks, report.TCPChecks =
 			runtimeChecks.Collect(ctx)
+		report.Packages = security.Packages()
+		report.Vulnerabilities = security.Vulnerabilities()
 		report.Sequence, err = sequence.Next()
 		if err != nil {
 			logger.Error("sequence update failed", "error", err)
@@ -95,6 +110,7 @@ func main() {
 		select {
 		case <-ctx.Done():
 			senderWait.Wait()
+			securityWait.Wait()
 			logger.Info("agent stopped")
 			return
 		case <-ticker.C:

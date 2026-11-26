@@ -1,0 +1,19 @@
+[Unit]
+Description=Monitorozo container image CVE scan (Trivy)
+After=docker.service network-online.target
+Wants=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# Optional overrides: CVESCAN_MEMORY, CVESCAN_OUT, TRIVY_IMAGE, CVESCAN_CACHE.
+EnvironmentFile=-/etc/monitorozo/cvescan.env
+ExecStart=/usr/local/sbin/monitorozo-cvescan
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+TimeoutStartSec=4h
+UMask=0022
+PrivateTmp=true
+NoNewPrivileges=true

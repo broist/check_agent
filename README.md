@@ -10,6 +10,11 @@ pending/firing/resolved CPU, memory, disk and offline rules, cooldown,
 delivery retry, recovery mail, acknowledgement and history.
 Optional checks cover selected systemd units, Docker containers and health,
 HTTP/HTTPS status and latency, TLS certificate lifetime, and TCP reachability.
+A per-server "Biztonság" section shows pending package and security updates
+and reboot state (`apt-check`, opt-in) plus container image CVE counts from a
+daily, root-run Trivy scan (`monitorozo-cvescan.timer`, summarized by
+`monitorozo-agent trivy-summary`), with grace-period alerts for pending
+security updates/reboots, fixable critical CVEs and stale scans.
 Reports are first committed to a bounded on-disk spool, so short outages and
 agent restarts do not discard pending telemetry.
 
@@ -24,7 +29,8 @@ cmd/agent              agent executable
 cmd/server             server executable and credential utilities
 internal/agent         delivery queue, sequence state and retry
 internal/collector     /proc and statfs Linux collectors
-internal/checks        optional systemd, Docker, HTTP/TLS and TCP checks
+internal/checks        optional systemd, Docker, HTTP/TLS, TCP and package/CVE checks
+internal/trivy         Trivy JSON summarizer behind "monitorozo-agent trivy-summary"
 internal/server        HTTP API, dashboard and security middleware
 internal/storage       SQLite migrations and queries
 internal/alerts        alert rule engine and lifecycle evaluation
@@ -36,7 +42,7 @@ deploy/systemd         hardened native units
 deploy/docker          Dockerfiles and Compose
 migrations             ordered embedded SQL migrations
 docs                   threat model and operations runbook
-scripts                install, update, rollback, backup, restore and uninstall helpers
+scripts                install, update, rollback, backup, restore, uninstall and CVE scan helpers
 ```
 
 ## Build and test

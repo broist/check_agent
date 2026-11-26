@@ -31,3 +31,14 @@ tcp_checks:
   - name: local-postgresql
     address: 127.0.0.1:5432
     timeout: 3s
+
+# Package updates (opt-in): apt-check runs hourly in the background; the reboot
+# state comes from /run/reboot-required. Needs update-notifier-common on Ubuntu.
+packages:
+  enabled: true
+  interval: 1h
+  command: /usr/lib/update-notifier/apt-check
+# Container CVE summary written daily by monitorozo-cvescan (root timer).
+# Leave the path empty to disable. The agent needs no Docker socket access.
+vulnerability_report:
+  path: /var/lib/monitorozo-cvescan/summary.json

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/broist/check_agent/internal/alerts"
@@ -21,11 +22,52 @@ type filesystemView struct {
 
 type serverView struct {
 	model.Report
-	Online  bool
-	Fresh   bool
-	Missing bool
-	Files   []filesystemView
-	Issues  []string
+	Online       bool
+	Fresh        bool
+	Missing      bool
+	Files        []filesystemView
+	Issues       []string
+	PackageLevel string
+	Images       []imageView
+}
+
+type imageView struct {
+	model.ImageVulnerabilities
+	Level string
+}
+
+// securityView derives the dashboard levels and issue lines of the
+// "Biztonság" section from the latest report.
+func securityView(view *serverView) {
+	if packages := view.Packages; packages != nil {
+		view.PackageLevel = "ok"
+		if packages.Security > 0 || packages.RebootRequired || packages.Error != "" {
+			view.PackageLevel = "warning"
+		}
+		if packages.RebootRequired {
+			issue := "Újraindítás szükséges a telepített frissítések miatt"
+			if len(packages.RebootPackages) > 0 {
+				issue += " (" + strings.Join(packages.RebootPackages, ", ") + ")"
+			}
+			view.Issues = append(view.Issues, issue+". Karbantartási ablakban: sudo reboot.")
+		}
+	}
+	if view.Vulnerabilities == nil {
+		return
+	}
+	for _, image := range view.Vulnerabilities.Images {
+		item := imageView{ImageVulnerabilities: image, Level: "ok"}
+		switch {
+		case image.FixableCritical > 0:
+			item.Level = "critical"
+			view.Issues = append(view.Issues, fmt.Sprintf(
+				"Javítható kritikus CVE: %s (%d db). Frissítsd a képet vagy az alapképét, majd telepítsd újra a konténert.",
+				image.Image, image.FixableCritical))
+		case image.FixableHigh > 0 || image.FixableMedium > 0 || image.Error != "":
+			item.Level = "warning"
+		}
+		view.Images = append(view.Images, item)
+	}
 }
 
 func formatBytes(value uint64) string {
@@ -136,6 +178,7 @@ func (s *Server) dashboardView(ctx context.Context, reports []model.Report, acti
 				view.Issues = append(view.Issues, "TCP-kapcsolat sikertelen: "+check.Address+". Ellenőrizd a szolgáltatás portját és a tűzfalat. "+check.Error)
 			}
 		}
+		securityView(&view)
 		data.Reports = append(data.Reports, view)
 	}
 	for _, agent := range s.cfg.AgentTokens {

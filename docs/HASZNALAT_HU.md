@@ -31,6 +31,23 @@ Fontos mezők:
   megfelelő `df` és `du` ellenőrzés útvonalát is.
 - **Lemez I/O és hálózat**: a lenyitható részletekben; az írási sebesség
   nem azonos a tárhely foglaltságának növekedésével.
+- **Biztonság**: a tárhely alatt, minden szerverkártyán.
+  - *Csomagok*: „Frissítés vár: N · ebből biztonsági: M · Újraindítás
+    szükséges: igen/nem” és az utolsó ellenőrzés ideje. Újraindításnál
+    zárójelben a `/run/reboot-required.pkgs` csomagjai látszanak. Ha az agentben
+    a `packages` ki van kapcsolva, „Csomagállapot nem érkezik” jelenik meg. Az
+    `apt-check` hibáját (például hiányzó `update-notifier-common`) figyelmeztetés
+    mutatja; ilyenkor a legutóbbi sikeres számok maradnak láthatók.
+  - *CVE-táblázat*: a futó konténerek képei, képenként a kritikus, magas és
+    közepes súlyosságú sérülékenységek száma, mellettük „javítható: x/y/z”
+    (amelyre a csomag javított verziója már elérhető). Piros a sor, ha van
+    javítható kritikus hiba; sárga, ha javítható magas/közepes hiba van, vagy a
+    kép vizsgálata sikertelen; zöld egyébként. Fölötte a vizsgálat ideje és a
+    szkenner verziója. A javítható kritikus CVE és a függő újraindítás a
+    kártya figyelmeztetései között is megjelenik.
+
+A Biztonság rész adatai a napi CVE-vizsgálatból (`monitorozo-cvescan.timer`) és
+az óránkénti `apt-check` futásból származnak, nem 10 másodpercenként frissülnek.
 
 A mérések oldalújratöltés nélkül frissülnek. A lenyitott részletek, a grafikon
 időtartama és az email-űrlap megmaradnak. A rendszer 15 másodpercenként is
@@ -65,6 +82,18 @@ Tipikus riasztások:
 - Docker konténer leállt vagy hibás
 - HTTP ellenőrzés sikertelen
 - TLS tanúsítvány hamarosan lejár
+- biztonsági frissítés függőben (figyelmeztetés, ha a `security_update_grace`,
+  alapból 72 óra, után is vár biztonsági frissítés)
+- újraindítás szükséges (figyelmeztetés `reboot_required_grace`, alapból
+  168 óra után)
+- javítható kritikus CVE a konténerképben (kritikus, képenként; megszűnik, ha a
+  kép már nem fut vagy a frissített képben nincs javítható kritikus hiba)
+- CVE-vizsgálat elavult (figyelmeztetés, ha nem készült vizsgálat, vagy a
+  legutóbbi régebbi, mint `vulnerability_scan_max_age`, alapból 48 óra)
+
+Ha egy `apt-check` futás vagy egy kép vizsgálata sikertelen, a már meglévő
+riasztás változatlanul megmarad (a türelmi idő nem indul újra); a riasztás csak
+akkor oldódik fel magától, ha az adott funkciót kikapcsolod az agentben.
 
 ## Nyugtázás
 
