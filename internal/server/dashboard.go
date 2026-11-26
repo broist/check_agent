@@ -29,11 +29,38 @@ type serverView struct {
 	Issues       []string
 	PackageLevel string
 	Images       []imageView
+
+	// Map card and detail panel.
+	Name, Description             string
+	CustomName, CustomDescription string
+	Level, LevelLabel             string
+	Selected, Renaming            bool
+	SelectURL, RenameURL          string
+	Tabs                          []tabView
+	Disk                          filesystemView
+	Meters                        []meterView
+	Rings                         []ringView
+	Mini, Chart                   chartView
+	Endpoints                     []endpointView
+	PageLeaves, ServiceLeaves     []leafView
+	SecurityLeaves                []leafView
+	SecurityCount                 string
+	PagesUp                       int
+	ServicesUp, ServicesTotal     int
+	OpenAlerts                    []alertView
+	Firing, Faults, Broken        int
+	FixableCritical               int
 }
 
 type imageView struct {
 	model.ImageVulnerabilities
 	Level string
+
+	Short                          string
+	CritWidth, HighWidth, MedWidth float64
+	HighX, MedX                    float64
+	Fixable                        int
+	FixClass                       string
 }
 
 // securityView derives the dashboard levels and issue lines of the
@@ -179,6 +206,10 @@ func (s *Server) dashboardView(ctx context.Context, reports []model.Report, acti
 			}
 		}
 		securityView(&view)
+		if interval := report.Timestamp.Sub(previous.Timestamp); !previous.Timestamp.IsZero() && interval > 0 &&
+			(data.ReportEvery == 0 || interval < data.ReportEvery) {
+			data.ReportEvery = interval.Round(time.Second)
+		}
 		data.Reports = append(data.Reports, view)
 	}
 	for _, agent := range s.cfg.AgentTokens {
@@ -187,5 +218,150 @@ func (s *Server) dashboardView(ctx context.Context, reports []model.Report, acti
 			present[agent.AgentID] = true
 		}
 	}
-	return data, nil
+	return data, s.mapView(ctx, &data)
+}
+
+// mapView adds the infrastructure map, the detail panels, the status line
+// and the timeline to the dashboard data.
+func (s *Server) mapView(ctx context.Context, data *dashboardData) error {
+	now := time.Now()
+	labels, err := s.store.AgentLabels(ctx)
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(data.Reports))
+	for _, view := range data.Reports {
+		ids = append(ids, view.AgentID)
+	}
+	metrics, availability, err := s.recentHistory(ctx, ids, now)
+	if err != nil {
+		return err
+	}
+	names := make(map[string]string, len(data.Reports))
+	status := statusView{HostsTotal: len(data.Reports), HostsUp: data.OnlineCount}
+	onlySecurity := true
+	for i := range data.Reports {
+		view := &data.Reports[i]
+		decorateImages(view)
+		s.decorate(view, labels[view.AgentID], data.Alerts, metrics[view.AgentID], availability[view.AgentID], now)
+		names[view.AgentID] = view.Name
+		for _, image := range view.Images {
+			view.FixableCritical += image.FixableCritical
+		}
+		status.PagesUp += view.PagesUp
+		status.PagesTotal += len(view.HTTPChecks)
+		status.OpenAlerts += view.Firing
+		if view.Level == "bad" {
+			status.Down++
+		}
+		for _, alert := range view.OpenAlerts {
+			if alert.State == "firing" && !securityRules[alert.RuleKey] {
+				onlySecurity = false
+			}
+		}
+	}
+	switch {
+	case status.Down > 0:
+		status.Emphasis = fmt.Sprintf("%d gépen hiba van", status.Down)
+		status.Detail = "A pirossal jelölt gépre kattintva látod, mi nem működik."
+	case status.OpenAlerts > 0:
+		status.Lead = "Minden fut — "
+		status.Emphasis = fmt.Sprintf("%d dolog figyelmet kér", status.OpenAlerts)
+		status.Detail = "Leállás nincs. A nyitott tételek részletei a gépekre kattintva láthatók."
+		if onlySecurity {
+			status.Detail = "Leállás nincs. A nyitott tételek a biztonsági vizsgálatból jönnek — részletek a gépekre kattintva."
+		}
+	case len(data.Reports) == 0:
+		status.Lead, status.Detail = "Még nincs csatlakoztatott gép", "Az első agent jelentése után itt jelennek meg a mérések."
+	default:
+		status.Lead, status.Detail = "Minden rendben", "Nincs nyitott riasztás."
+	}
+	data.Status = status
+	history, err := s.store.TimelineAlerts(ctx, now.Add(-timelineWindow), timelineLimit)
+	if err != nil {
+		return err
+	}
+	data.Timeline = buildTimeline(history, names, "all", now)
+	data.Hub = publicHost(s.cfg.PublicURL)
+	data.HubInterval = reportInterval(data.ReportEvery)
+	data.UpdatedAt = now.Local().Format("15:04")
+	applyState(data, viewState{})
+	return nil
+}
+
+func levelRank(level string) int {
+	switch level {
+	case "bad":
+		return 2
+	case "warn":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// applyState marks the selected machine, detail tab and timeline filter.
+func applyState(data *dashboardData, state viewState) {
+	selected := ""
+	for _, view := range data.Reports {
+		if view.AgentID == state.Agent {
+			selected = view.AgentID
+		}
+	}
+	if selected == "" {
+		rank := -1
+		for _, view := range data.Reports {
+			if levelRank(view.Level) > rank {
+				selected, rank = view.AgentID, levelRank(view.Level)
+			}
+		}
+	}
+	tab := "ov"
+	for _, item := range panelTabs {
+		if item.Key == state.Tab {
+			tab = item.Key
+		}
+	}
+	filter := "all"
+	filters := []filterView{{Key: "all", Label: "Mind"}, {Key: "open", Label: "Nyitott"}, {Key: "done", Label: "Megoldott"}}
+	for _, view := range data.Reports {
+		filters = append(filters, filterView{Key: "agent:" + view.AgentID, Label: view.Name})
+	}
+	for _, item := range filters {
+		if item.Key == state.Filter {
+			filter = item.Key
+		}
+	}
+	for i := range filters {
+		filters[i].On = filters[i].Key == filter
+		filters[i].URL = state.url(selected, tab, filters[i].Key, false) + "#mi-tortent"
+	}
+	data.Filters, data.Selected, data.Tab, data.Filter = filters, selected, tab, filter
+	for i := range data.Reports {
+		view := &data.Reports[i]
+		view.Selected = view.AgentID == selected
+		view.Renaming = view.Selected && state.Rename
+		view.SelectURL = state.url(view.AgentID, "", filter, false)
+		view.RenameURL = state.url(view.AgentID, tab, filter, true) + "#atnevezes-" + view.AgentID
+		view.Tabs = view.Tabs[:0]
+		for _, item := range panelTabs {
+			count := 0
+			if item.Key == "al" {
+				count = len(view.OpenAlerts)
+			}
+			view.Tabs = append(view.Tabs, tabView{Key: item.Key, Label: item.Label, Count: count,
+				On: item.Key == tab, URL: state.url(view.AgentID, item.Key, filter, false)})
+		}
+	}
+	data.TimelineEmpty = true
+	for d := range data.Timeline {
+		day := &data.Timeline[d]
+		day.Hidden = true
+		for e := range day.Events {
+			day.Events[e].Hidden = !matchesFilter(day.Events[e], filter)
+			if !day.Events[e].Hidden {
+				day.Hidden, data.TimelineEmpty = false, false
+			}
+		}
+	}
 }

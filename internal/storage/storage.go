@@ -25,7 +25,9 @@ type Store struct {
 }
 
 type Alert struct {
+	// Hostname, DisplayName and Target are display context, not stored columns.
 	Hostname          string
+	DisplayName       string
 	Target            string
 	ID                int64
 	AgentID           string
@@ -237,6 +239,9 @@ func (s *Store) SaveReport(ctx context.Context, report model.Report) error {
 	if err != nil {
 		return err
 	}
+	if err := recordHTTPChecksTx(ctx, tx, report); err != nil {
+		return fmt.Errorf("record HTTP availability: %w", err)
+	}
 	return tx.Commit()
 }
 
@@ -395,6 +400,10 @@ func (s *Store) Maintain(ctx context.Context, now time.Time, rawRetention, aggre
 	if _, err := tx.ExecContext(ctx, "DELETE FROM hourly_metrics WHERE hour_start < ?",
 		aggregateCutoff.Format(time.RFC3339)); err != nil {
 		return fmt.Errorf("delete hourly metrics: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM http_check_buckets WHERE bucket_start < ?",
+		aggregateCutoff.Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("delete HTTP availability: %w", err)
 	}
 	return tx.Commit()
 }

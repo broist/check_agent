@@ -49,6 +49,10 @@ func (s *Sender) SendTo(alert storage.Alert, dashboardURL, recipient string) err
 	if alert.Hostname == "" {
 		alert.Hostname = alert.AgentID
 	}
+	server, subjectName := ServerName(alert), alert.Hostname
+	if name := strings.TrimSpace(alert.DisplayName); name != "" {
+		subjectName = name
+	}
 	state := "KRITIKUS"
 	if alert.Severity == "warning" {
 		state = "FIGYELMEZTETÉS"
@@ -59,7 +63,7 @@ func (s *Sender) SendTo(alert storage.Alert, dashboardURL, recipient string) err
 	if alert.RuleKey == "test_email" {
 		state = "TESZT"
 	}
-	subject := mime.QEncoding.Encode("UTF-8", fmt.Sprintf("[Monitorozo] %s: %s · %s · %s", state, alert.Hostname, description.Title, alert.Target))
+	subject := mime.QEncoding.Encode("UTF-8", fmt.Sprintf("[Monitorozo] %s: %s · %s · %s", state, subjectName, description.Title, alert.Target))
 	subject = strings.ReplaceAll(subject, "?= =?", "?=\r\n =?")
 	duration := ""
 	if alert.ResolvedAt != nil {
@@ -69,7 +73,7 @@ func (s *Sender) SendTo(alert storage.Alert, dashboardURL, recipient string) err
 		description.Action = "Az állapot helyreállt. Ellenőrizd, hogy a javulás tartós-e. " + description.Action
 	}
 	body := fmt.Sprintf("%s: %s\nSzerver: %s\nAgent azonosító: %s\nÉrintett erőforrás / útvonal: %s\n%s\nKezdete: %s%s\n\nTeendő\n%s\n\nÁllapot és részletek: %s\n",
-		state, description.Title, alert.Hostname, alert.AgentID, alert.Target, description.Measurement,
+		state, description.Title, server, alert.AgentID, alert.Target, description.Measurement,
 		alert.StartedAt.Format(time.RFC3339), duration, description.Action, dashboardURL)
 	var encoded bytes.Buffer
 	encoder := quotedprintable.NewWriter(&encoded)
@@ -130,4 +134,18 @@ func (s *Sender) SendTo(alert storage.Alert, dashboardURL, recipient string) err
 		return err
 	}
 	return nil
+}
+
+// ServerName is the server label of a notification: the operator-defined
+// display name with the reported hostname, or the hostname alone.
+func ServerName(alert storage.Alert) string {
+	host := alert.Hostname
+	if host == "" {
+		host = alert.AgentID
+	}
+	name := strings.TrimSpace(alert.DisplayName)
+	if name == "" || name == host {
+		return host
+	}
+	return name + " (" + host + ")"
 }

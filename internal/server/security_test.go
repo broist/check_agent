@@ -77,11 +77,11 @@ func TestDashboardRendersSecuritySection(t *testing.T) {
 	html, data := renderOverview(t, secured, legacy)
 
 	for _, fragment := range []string{
-		"Biztonság", "Frissítés vár: <strong>12</strong>", "ebből biztonsági: <strong>3</strong>",
-		"Újraindítás szükséges: <strong>igen</strong>", "libc6, linux-image-generic",
-		"CVE-vizsgálat: ", "trivy 0.65.0", `<tr class="critical">`, `<tr class="warning">`, `<tr class="ok">`,
-		"javítható: 2/1/0", "A vizsgálat üres eredményt adott.", longImage,
-		"Csomagállapot nem érkezik (packages kikapcsolva)", "CVE-adat nem érkezik",
+		"Biztonság", "<b>12 (ebből bizt.: 3)</b>", "<b>12 vár · 3 bizt.</b>",
+		"<b>szükséges</b>", "Újraindítás kell", "libc6, linux-image-generic",
+		"4 kép · vizsgálva ", "trivy 0.65.0", `<div class="cv critical">`, `<div class="cv warning">`, `<div class="cv ok">`,
+		`title="javítható: 2/1/0"`, "A vizsgálat üres eredményt adott.", longImage, "nginx:1.27", "2 krit.",
+		"Csomagállapot nem érkezik (packages kikapcsolva)", "Ezen a gépen nincs CVE-vizsgálat",
 	} {
 		if !strings.Contains(html, fragment) {
 			t.Errorf("rendered overview misses %q", fragment)
@@ -112,15 +112,14 @@ func TestDashboardSecurityEmptyStates(t *testing.T) {
 	}
 	html, _ := renderOverview(t, report)
 	for _, fragment := range []string{
-		"Ellenőrzés: még nem futott", "Az első csomagellenőrzés folyamatban.",
-		"CVE-vizsgálat: még nem készült", "Még nem készült CVE-vizsgálat.",
-		"Újraindítás szükséges: <strong>nem</strong>",
+		"Csomagellenőrzés: még nem futott", "Az első csomagellenőrzés folyamatban.",
+		"Még nem készült CVE-vizsgálat.", "<b>nem kell</b>", "Nincs biztonsági adat",
 	} {
 		if !strings.Contains(html, fragment) {
 			t.Errorf("rendered overview misses %q", fragment)
 		}
 	}
-	if strings.Contains(html, "cve-table") {
+	if strings.Contains(html, `class="cves"`) {
 		t.Error("empty scan must not render a table")
 	}
 }

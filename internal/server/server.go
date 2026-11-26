@@ -49,19 +49,28 @@ type Server struct {
 	alerts       *alerts.Engine
 	notifyWake   chan struct{}
 	emailLimiter *auth.Limiter
+	history24    historyCache
 }
 
 type dashboardData struct {
 	CSRF          string
 	Reports       []serverView
 	Alerts        []storage.Alert
-	AlertHistory  []storage.Alert
 	Preferences   storage.NotificationPreferences
 	SMTPReady     bool
 	SMTPAddress   string
 	OnlineCount   int
 	CriticalCount int
 	DiskCount     int
+
+	Status                statusView
+	Timeline              []timelineDay
+	Filters               []filterView
+	Selected, Tab, Filter string
+	Hub, HubInterval      string
+	ReportEvery           time.Duration
+	UpdatedAt             string
+	TimelineEmpty         bool
 }
 
 func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *slog.Logger) (*Server, error) {
@@ -99,6 +108,7 @@ func New(cfg config.Server, store *storage.Store, mailer AlertSender, logger *sl
 		"serviceState":   labelServiceState,
 		"containerState": labelContainerState,
 		"join":           func(values []string) string { return strings.Join(values, ", ") },
+		"clock":          func(value time.Time) string { return clock(value, time.Now()) },
 	}
 	templates, err := template.New("pages").Funcs(funcs).ParseFS(web.Files, "*.html")
 	if err != nil {
@@ -263,6 +273,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/notifications", s.requireAuth(s.saveNotifications))
 	mux.HandleFunc("POST /api/v1/notifications/test", s.requireAuth(s.testNotification))
 	mux.HandleFunc("POST /api/v1/alerts/{id}/ack", s.requireAuth(s.acknowledgeAlert))
+	mux.HandleFunc("POST /api/v1/agents/{id}/label", s.requireAuth(s.saveAgentLabel))
 	mux.Handle("GET /static/", http.FileServer(http.FS(web.Files)))
 	mux.HandleFunc("GET /", s.requireAuth(s.dashboard))
 	return s.securityHeaders(mux)
@@ -352,19 +363,14 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	history, err := s.store.AlertHistory(ctx, 50)
-	if err != nil {
-		s.logger.Error("load alert history failed", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
 	data, err := s.dashboardView(ctx, reports, alerts)
 	if err != nil {
 		s.logger.Error("build dashboard view failed", "error", err)
 		http.Error(w, "Az állapot nem tölthető be.", http.StatusInternalServerError)
 		return
 	}
-	data.CSRF, data.AlertHistory = session.CSRF, history
+	data.CSRF = session.CSRF
+	applyState(&data, parseViewState(r.URL.Query()))
 	name := "dashboard"
 	if r.URL.Path == "/api/v1/dashboard" {
 		name = "overview"
@@ -573,10 +579,16 @@ func (s *Server) processNotifications(ctx context.Context) {
 		return
 	}
 	var reports []model.Report
+	var labels map[string]storage.AgentLabel
 	if len(pending) > 0 && prefs.Enabled && s.cfg.SMTP.Enabled {
 		reports, err = s.store.LatestReports(operationCtx)
 		if err != nil {
 			s.logger.Error("load notification context failed", "error", err)
+			return
+		}
+		labels, err = s.store.AgentLabels(operationCtx)
+		if err != nil {
+			s.logger.Error("load agent labels failed", "error", err)
 			return
 		}
 	}
@@ -590,6 +602,7 @@ func (s *Server) processNotifications(ctx context.Context) {
 				break
 			}
 		}
+		alert.DisplayName = labels[alert.AgentID].DisplayName
 		if !s.cfg.SMTP.Enabled || !prefs.Enabled || (alert.Severity == "warning" && !prefs.Warnings) || (alert.State == "resolved" && !prefs.Recovery) {
 			if err := s.store.MarkAlertDelivery(operationCtx, alert, "suppressed", time.Now()); err != nil {
 				s.logger.Error("suppress notification failed", "error", err)
