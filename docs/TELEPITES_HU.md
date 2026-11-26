@@ -267,6 +267,13 @@ További beállítható környezeti változók ugyanebben a fájlban:
 `CVESCAN_OUT` (összesítő helye, ekkor az agent `vulnerability_report.path`
 értékét is írd át), `TRIVY_IMAGE` (más Trivy-verzió), `CVESCAN_CACHE`.
 
+Elfogadott kockázat — `CVESCAN_SKIP_FILES` (vesszővel elválasztott fájlok a
+képeken belül, amelyeket a vizsgálat kihagy). Alapértéke
+`usr/local/bin/gosu`: a hivatalos Postgres-kép jogosultság-csökkentő
+segédprogramja csak induláskor fut egyszer, hálózatot és TLS-t nem használ, a
+Trivy mégis jelzi a Go-könyvtár verziója miatt — ez hamis riasztás lenne.
+Üres értékkel (`CVESCAN_SKIP_FILES=`) minden fájlt vizsgál.
+
 Az agent alapból nem riaszt elavult vizsgálatra, amíg a
 `vulnerability_report.path` üres. Ha beállítottad, de a szkenner még nem futott,
 a felületen „CVE-vizsgálat elavult” figyelmeztetés jelenik meg — az első kézi

@@ -12,12 +12,18 @@
 #   TRIVY_IMAGE     Trivy image (default: aquasec/trivy:0.65.0)
 #   CVESCAN_CACHE   Trivy cache directory (default: /var/cache/monitorozo-cvescan)
 #   MONITOROZO_AGENT_BIN  agent binary (default: /usr/local/bin/monitorozo-agent)
+#   CVESCAN_SKIP_FILES  comma-separated files inside the images that are not
+#                   scanned - accepted risk (default: usr/local/bin/gosu, the
+#                   official postgres image's privilege-drop helper: it runs
+#                   once at start-up and uses no network or TLS, but Trivy
+#                   flags the Go stdlib it was built with). Empty = scan all.
 set -eu
 
 memory="${CVESCAN_MEMORY:-1200m}"
 out="${CVESCAN_OUT:-/var/lib/monitorozo-cvescan/summary.json}"
 trivy_image="${TRIVY_IMAGE:-aquasec/trivy:0.65.0}"
 cache_dir="${CVESCAN_CACHE:-/var/cache/monitorozo-cvescan}"
+skip_files="${CVESCAN_SKIP_FILES-usr/local/bin/gosu}"
 agent_bin="${MONITOROZO_AGENT_BIN:-/usr/local/bin/monitorozo-agent}"
 docker_socket=/var/run/docker.sock
 
@@ -81,6 +87,7 @@ while IFS= read -r image; do
   echo "Scanning $image"
   if ! trivy image --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
     --format json --quiet --timeout 20m --skip-db-update \
+    ${skip_files:+--skip-files} ${skip_files:+"$skip_files"} \
     --image-src docker "$image" >"$report" 2>"$work/image-$index.err"; then
     echo "Scan failed for $image:" >&2
     tail -n 20 "$work/image-$index.err" >&2 || true
